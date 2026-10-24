@@ -36,9 +36,19 @@ function setup(window) {
     });
     window.demandsAttentionChanged.connect(() => {
         updateDemandsAttention(window);
+        enforceTrayManagedState(window);
     });
     window.minimizedChanged.connect(() => {
         onMinimizeChanged(window);
+    });
+    window.skipTaskbarChanged.connect(() => {
+        enforceTrayManagedState(window);
+    });
+    window.skipPagerChanged.connect(() => {
+        enforceTrayManagedState(window);
+    });
+    window.skipSwitcherChanged.connect(() => {
+        enforceTrayManagedState(window);
     });
     window.iconChanged.connect(() => {
         updateWindowIcon(window);
@@ -84,6 +94,7 @@ function addTrayIcon(window) {
     trayItem.requestClose.connect(closeWindow);
     trayItem.requestUnpin.connect(unpinIcon);
     trayIcons[windowId] = trayItem;
+    enforceTrayManagedState(window);
 }
 
 function removeTrayIcon(window) {
@@ -103,6 +114,29 @@ function setSkip(skip, window) {
     window.skipPager = skip;
     window.skipTaskbar = skip;
     window.skipSwitcher = skip;
+}
+
+function enforceTrayManagedState(window) {
+    if (!(window.internalId in trayIcons) || !window.minimized) {
+        return;
+    }
+
+    /*
+     * A tray-managed minimized window normally stays out of Plasma Task
+     * Manager. Keep the existing attention behaviour by exposing it there
+     * only while KWin reports that it demands attention.
+     */
+    const skipTaskbar = !window.demandsAttention;
+
+    if (window.skipTaskbar !== skipTaskbar) {
+        window.skipTaskbar = skipTaskbar;
+    }
+    if (!window.skipPager) {
+        window.skipPager = true;
+    }
+    if (!window.skipSwitcher) {
+        window.skipSwitcher = true;
+    }
 }
 
 function toggleMinimize(windowId) {
