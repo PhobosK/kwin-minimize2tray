@@ -18,6 +18,7 @@ Hide windows to the system tray, similar to [KDocker](https://github.com/user-no
 - Should work with windows from any application **as long as they are minimizable**
 - Windows are hidden from Task Manager (taskbar), Task Switcher (Alt+Tab), Desktop Pager and restored when clicking on the tray icon
 - Per application visibility can be configured from System Tray widget configuration
+- Uses the desktop-file icon, including user overrides, with the window icon as fallback
 - Application and window status
   - [Unity LauncherAPI](https://wiki.ubuntu.com/Unity/LauncherAPI)
     - Counter: Top-right corner (optional dot style can be enabled from KWin script settings)

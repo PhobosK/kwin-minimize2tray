@@ -53,6 +53,9 @@ function setup(window) {
     window.iconChanged.connect(() => {
         updateWindowIcon(window);
     });
+    window.desktopFileNameChanged.connect(() => {
+        updateWindowIcon(window);
+    });
 }
 
 function setupTrayicon(window) {
@@ -78,15 +81,10 @@ function addTrayIcon(window) {
     if (windowId in trayIcons) {
         return;
     }
-    let launcherUrl = window.desktopFileName;
-    launcherUrl = "application://" + launcherUrl;
-    launcherUrl = launcherUrl + ".desktop";
-
     const trayItem = trayIconComponent.createObject(root, {
         "icon": window.icon,
         "windowId": windowId,
         "toolTipText": formattedWindowInfo(window),
-        "launcherUrl": launcherUrl,
         "xdgName": window.desktopFileName,
         "countUseDot": countUseDot
     });
@@ -224,6 +222,7 @@ function updateToolTip(window) {
 
 function updateWindowIcon(window) {
     if (window.internalId in trayIcons) {
+        trayIcons[window.internalId].xdgName = window.desktopFileName;
         trayIcons[window.internalId].icon = window.icon;
     }
 }

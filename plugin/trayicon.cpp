@@ -1,14 +1,25 @@
 #include "trayicon.h"
 #include <KService>
+#include <KSycoca>
 #include <QAction>
 #include <QDBusArgument>
 #include <QDBusConnection>
 #include <QDebug>
+#include <QDir>
+#include <QFileInfo>
 #include <QPainter>
+#include <QTimer>
 #include <QVariantMap>
 
 TrayIcon::TrayIcon(QObject *parent) : QObject(parent) {
-    connect(this, &TrayIcon::xdgNameChanged, this, [this]() { initializeTrayIcon(); });
+    connect(this, &TrayIcon::xdgNameChanged, this, &TrayIcon::updateApplication);
+    // Queue cache refreshes to avoid re-entering KService lookups.
+    connect(KSycoca::self(), &KSycoca::databaseChanged, this, &TrayIcon::updateApplication, Qt::QueuedConnection);
+    // Wait until QML has assigned all initial window properties.
+    QTimer::singleShot(0, this, [this]() {
+        initializeTrayIcon();
+        updateApplication();
+    });
 }
 
 TrayIcon::~TrayIcon() = default;
@@ -174,7 +185,7 @@ void TrayIcon::initializeTrayIcon() {
     }
 
     qDebug() << "New Tray Icon" << m_xdgName;
-    trayIcon = new KStatusNotifierItem(m_xdgName, this);
+    trayIcon = new KStatusNotifierItem(m_xdgName.isEmpty() ? m_windowId.toString() : m_xdgName, this);
     m_menu = new QMenu();
 
     QAction *showAction = new QAction("Show/Hide", m_menu);
@@ -197,11 +208,9 @@ void TrayIcon::initializeTrayIcon() {
 
     connect(this, &TrayIcon::toolTipTextChanged, this, [this]() { trayIcon->setToolTipTitle(m_toolTipText); });
 
-    connect(this, &TrayIcon::xdgNameChanged, this, [this]() { setAppName(m_xdgName); });
-
     connect(this, &TrayIcon::appNameChanged, this, [this]() { trayIcon->setTitle(m_appName); });
 
-    connect(this, &TrayIcon::iconChanged, this, [this]() { trayIcon->setIconByPixmap(m_icon); });
+    connect(this, &TrayIcon::iconChanged, this, &TrayIcon::updateBadges);
 
     QDBusConnection::sessionBus().connect(QString(), QString(), "com.canonical.Unity.LauncherEntry", "Update", this,
                                           SLOT(launcherAPIUpdate(QString, QMap<QString, QVariant>)));
@@ -226,35 +235,64 @@ void TrayIcon::initializeTrayIcon() {
     connect(this, &TrayIcon::progressVisibleChanged, this, [this]() { updateBadges(); });
     connect(this, &TrayIcon::countChanged, this, [this]() { updateBadges(); });
     connect(this, &TrayIcon::progressChanged, this, [this]() { updateBadges(); });
+    connect(this, &TrayIcon::countUseDotChanged, this, &TrayIcon::updateBadges);
 
-    setAppName(m_xdgName);
     trayIcon->setContextMenu(m_menu);
     trayIcon->setToolTipTitle(m_toolTipText);
     trayIcon->setToolTipSubTitle(m_xdgName);
-    trayIcon->setIconByPixmap(m_icon);
     trayIcon->setTitle(m_appName);
     trayIcon->setStatus(KStatusNotifierItem::Active);
 }
 
-void TrayIcon::setAppName(const QString &xdgName) {
-    QString newName;
-    KService::Ptr service = KService::serviceByDesktopName(xdgName);
-    if (service) {
-        newName = service->name();
-    } else {
-        newName = xdgName;
+void TrayIcon::updateApplication() {
+    if (!trayIcon) {
+        return;
     }
-    qDebug() << xdgName << "XDG name:" << newName;
+
+    // Resolve installed identities, never open a path supplied by a window.
+    QString desktopId = QFileInfo(m_xdgName).fileName();
+    if (!desktopId.isEmpty() && !desktopId.endsWith(QLatin1String(".desktop"))) {
+        desktopId.append(QLatin1String(".desktop"));
+    }
+    const auto service = desktopId.isEmpty() ? KService::Ptr() : KService::serviceByStorageId(desktopId);
+    const QString newName = service ? service->name() : m_xdgName;
     if (m_appName != newName) {
         m_appName = newName;
         emit appNameChanged();
     }
+
+    m_desktopIcon = QIcon();
+    m_desktopIconName.clear();
+    if (service && service->isApplication()) {
+        desktopId = service->storageId();
+        const QString iconName = service->icon();
+        const bool isAbsolute = QDir::isAbsolutePath(iconName);
+        const bool isThemeIcon =
+            !iconName.isEmpty() && !iconName.contains(QLatin1Char('/')) && QIcon::hasThemeIcon(iconName);
+        if (isAbsolute || isThemeIcon) {
+            const QIcon icon = isAbsolute ? QIcon(iconName) : QIcon::fromTheme(iconName);
+            // QIcon can be non-null even when the image cannot be decoded.
+            if (!icon.pixmap(22, 22).isNull()) {
+                m_desktopIcon = icon;
+                if (!isAbsolute) {
+                    m_desktopIconName = iconName;
+                }
+            }
+        }
+    }
+    setLauncherUrl(desktopId.isEmpty() ? QString() : QStringLiteral("application://") + desktopId);
+    trayIcon->setToolTipSubTitle(m_xdgName);
+    updateBadges();
 }
 
 void TrayIcon::updateBadges() {
+    if (!trayIcon) {
+        return;
+    }
+    const QIcon &baseIcon = m_desktopIcon.isNull() ? m_icon : m_desktopIcon;
     if (m_countVisible || m_progressVisible) {
         QSize maxIconSize;
-        for (const QSize &size : m_icon.availableSizes()) {
+        for (const QSize &size : baseIcon.availableSizes()) {
             if (size.height() > maxIconSize.height()) {
                 maxIconSize = size;
             }
@@ -262,7 +300,12 @@ void TrayIcon::updateBadges() {
         if (maxIconSize.isEmpty()) {
             maxIconSize = QSize(64, 64);
         }
-        QPixmap basePixmap = m_icon.pixmap(maxIconSize);
+        // Bound badge rendering for unusually large source icons.
+        QPixmap basePixmap = baseIcon.pixmap(maxIconSize.boundedTo(QSize(256, 256)));
+        if (basePixmap.isNull()) {
+            trayIcon->setIconByPixmap(m_icon);
+            return;
+        }
         const float dynamicScaling = basePixmap.height() / 22.0;
         QRect pixmapRect = basePixmap.rect();
         QPainter painter(&basePixmap);
@@ -317,8 +360,11 @@ void TrayIcon::updateBadges() {
         }
 
         trayIcon->setIconByPixmap(basePixmap);
+    } else if (!m_desktopIconName.isEmpty()) {
+        trayIcon->setIconByName(m_desktopIconName);
     } else {
-        trayIcon->setIconByPixmap(m_icon);
+        // Absolute paths are images, not SNI theme names.
+        trayIcon->setIconByPixmap(baseIcon);
     }
 }
 

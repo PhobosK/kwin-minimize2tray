@@ -68,6 +68,8 @@ class TrayIcon : public QObject {
     KStatusNotifierItem *trayIcon = nullptr;
     QMenu *m_menu = nullptr;
     QIcon m_icon;
+    QIcon m_desktopIcon;
+    QString m_desktopIconName;
     QIcon icon() const { return m_icon; }
     void setIcon(QIcon icon);
     QUuid m_windowId;
@@ -82,7 +84,7 @@ class TrayIcon : public QObject {
     void initializeTrayIcon();
     QString m_appName;
     QString appName() const { return m_appName; }
-    void setAppName(const QString &xdgName);
+    void updateApplication();
     void updateBadges();
     bool m_demandsAttention = false;
     bool demandsAttention() const { return m_demandsAttention; }
