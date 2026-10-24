@@ -7,6 +7,12 @@
                 "Name": "Luis Bocanegra"
             }
         ],
+        "OtherContributors": [
+            {
+                "Name": "PhobosK",
+                "Task": "Fork development and improvements"
+            }
+        ],
         "BugReportUrl": "https://github.com/luisbocanegra/kwin-minimize2tray/issues",
         "Description": "Minimize active window to the System tray and skip Taskbar, Switcher and Pager",
         "EnabledByDefault": false,

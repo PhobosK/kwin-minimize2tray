@@ -53,6 +53,12 @@ cd kwin-minimize2tray
 
 3. Log-out or reboot to apply the change
 
+### Build version
+
+Set `MINIMIZE2TRAY_VERSION` in `CMakeLists.txt` to choose the version, or leave it empty to use the nearest Git version tag with its leading `v` removed, falling back to `package/metadata.json`.
+An explicit `-DMINIMIZE2TRAY_VERSION=1.2.3` overrides this setting.
+Configure with `-DPACKAGE_SCRIPT=ON` to generate a `.kwinscript` archive in the build directory.
+
 ## Configuration/Usage
 
 Enable/disable
