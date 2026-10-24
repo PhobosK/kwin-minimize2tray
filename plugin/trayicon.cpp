@@ -4,14 +4,215 @@
 #include <QAction>
 #include <QDBusArgument>
 #include <QDBusConnection>
+#include <QDBusConnectionInterface>
+#include <QDBusPendingCallWatcher>
+#include <QDBusPendingReply>
+#include <QDBusServiceWatcher>
 #include <QDebug>
 #include <QDir>
+#include <QEvent>
 #include <QFileInfo>
+#include <QFontMetricsF>
+#include <QGuiApplication>
+#include <QHash>
 #include <QPainter>
+#include <QPalette>
 #include <QTimer>
 #include <QVariantMap>
+#include <cmath>
+#include <limits>
+#include <utility>
 
-TrayIcon::TrayIcon(QObject *parent) : QObject(parent) {
+static QString normalizedLauncherUrl(QString id) {
+    const QString prefix = QStringLiteral("application://");
+    if (id.startsWith(prefix)) {
+        id.remove(0, prefix.size());
+    }
+    // Desktop IDs are case-sensitive filenames, not paths or arbitrary URLs.
+    if (id.isEmpty() || id.contains(QLatin1Char('/')) || id.contains(QLatin1Char('\\')) ||
+        id.contains(QLatin1Char(':')) || id.contains(QLatin1Char('?')) || id.contains(QLatin1Char('#')) ||
+        id.contains(QChar::Null)) {
+        return {};
+    }
+    if (!id.endsWith(QLatin1String(".desktop"))) {
+        id.append(QLatin1String(".desktop"));
+    }
+    return prefix + id;
+}
+
+static bool isInteger(const QVariant &value) {
+    const int type = value.metaType().id();
+    return type == QMetaType::Int || type == QMetaType::UInt || type == QMetaType::LongLong ||
+           type == QMetaType::ULongLong || type == QMetaType::Short || type == QMetaType::UShort;
+}
+
+static QVariantMap validatedLauncherProperties(const QVariantMap &properties) {
+    QVariantMap result;
+    const QVariant count = properties.value(QStringLiteral("count"));
+    if (isInteger(count)) {
+        bool ok = false;
+        const qint64 number = count.toLongLong(&ok);
+        if (ok && number >= 0 && number <= std::numeric_limits<int>::max()) {
+            result.insert(QStringLiteral("count"), number);
+        }
+    }
+    const QVariant progress = properties.value(QStringLiteral("progress"));
+    if (isInteger(progress) || progress.metaType().id() == QMetaType::Double ||
+        progress.metaType().id() == QMetaType::Float) {
+        bool ok = false;
+        const double fraction = progress.toDouble(&ok);
+        if (ok && std::isfinite(fraction)) {
+            result.insert(QStringLiteral("progress"), std::clamp(fraction, 0.0, 1.0));
+        }
+    }
+    for (const auto *key : {"count-visible", "progress-visible", "urgent"}) {
+        const QVariant value = properties.value(QLatin1String(key));
+        if (value.metaType().id() == QMetaType::Bool) {
+            result.insert(QLatin1String(key), value);
+        }
+    }
+    return result;
+}
+
+static QVariantMap emptyLauncherProperties() {
+    return {{QStringLiteral("count"), 0},
+            {QStringLiteral("count-visible"), false},
+            {QStringLiteral("progress"), 0.0},
+            {QStringLiteral("progress-visible"), false},
+            {QStringLiteral("urgent"), false}};
+}
+
+// One Unity receiver shares application state between all managed windows.
+class LauncherAPI : public QObject {
+    Q_OBJECT
+  public:
+    static QSharedPointer<LauncherAPI> instance() {
+        static QWeakPointer<LauncherAPI> shared;
+        auto instance = shared.toStrongRef();
+        if (!instance) {
+            instance = QSharedPointer<LauncherAPI>::create();
+            shared = instance;
+        }
+        return instance;
+    }
+
+    LauncherAPI() : m_watcher(QString(), QDBusConnection::sessionBus(), QDBusServiceWatcher::WatchForUnregistration) {
+        QDBusConnection::sessionBus().connect(QString(), QString(), QStringLiteral("com.canonical.Unity.LauncherEntry"),
+                                              QStringLiteral("Update"), this,
+                                              SLOT(update(QString, QVariantMap, QDBusMessage)));
+        connect(&m_watcher, &QDBusServiceWatcher::serviceUnregistered, this, &LauncherAPI::resetSource);
+    }
+
+    QVariantMap watch(const QString &url) {
+        if (url.isEmpty()) {
+            return emptyLauncherProperties();
+        }
+        auto &entry = m_entries[url];
+        ++entry.references;
+        return entry.properties;
+    }
+
+    void unwatch(const QString &url) {
+        auto entry = m_entries.find(url);
+        if (entry != m_entries.end() && --entry->references == 0 && entry->sender.isEmpty()) {
+            m_entries.erase(entry);
+        }
+    }
+
+    QVariantMap properties(const QString &url) const { return m_entries.value(url).properties; }
+
+  signals:
+    void updated(const QString &url);
+
+  private slots:
+    void update(const QString &uri, const QVariantMap &properties, const QDBusMessage &message) {
+        const QString url = normalizedLauncherUrl(uri);
+        auto entry = m_entries.find(url);
+        if (entry == m_entries.end() || message.service().isEmpty()) {
+            return;
+        }
+        const auto values = validatedLauncherProperties(properties);
+        if (values.isEmpty()) {
+            return;
+        }
+        const QString previousSender = entry->sender;
+        if (previousSender != message.service()) {
+            // A new publisher must not inherit the previous publisher's fields.
+            entry->properties = emptyLauncherProperties();
+            entry->sender = message.service();
+        }
+        for (auto value = values.cbegin(); value != values.cend(); ++value) {
+            entry->properties.insert(value.key(), value.value());
+        }
+        watchSource(message.service());
+        if (!previousSender.isEmpty() && previousSender != message.service()) {
+            bool stillUsed = false;
+            for (const auto &item : std::as_const(m_entries)) {
+                stillUsed |= item.sender == previousSender;
+            }
+            if (!stillUsed) {
+                m_watcher.removeWatchedService(previousSender);
+            }
+        }
+        emit updated(url);
+    }
+
+  private:
+    struct Entry {
+        QVariantMap properties = emptyLauncherProperties();
+        QString sender;
+        int references = 0;
+    };
+    QHash<QString, Entry> m_entries;
+    QDBusServiceWatcher m_watcher;
+
+    void watchSource(const QString &sender) {
+        if (m_watcher.watchedServices().contains(sender)) {
+            return;
+        }
+        m_watcher.addWatchedService(sender);
+        // Close the race where the publisher exits before the watch is installed.
+        auto *call = new QDBusPendingCallWatcher(
+            QDBusConnection::sessionBus().interface()->asyncCall(QStringLiteral("GetNameOwner"), sender), this);
+        connect(call, &QDBusPendingCallWatcher::finished, this, [this, call, sender]() {
+            const QDBusPendingReply<QString> reply = *call;
+            if (reply.isError()) {
+                resetSource(sender);
+            }
+            call->deleteLater();
+        });
+    }
+
+    void resetSource(const QString &sender) {
+        QStringList changed;
+        for (auto entry = m_entries.begin(); entry != m_entries.end();) {
+            if (entry->sender != sender) {
+                ++entry;
+                continue;
+            }
+            if (entry->references == 0) {
+                entry = m_entries.erase(entry);
+            } else {
+                entry->sender.clear();
+                entry->properties = emptyLauncherProperties();
+                changed.append(entry.key());
+                ++entry;
+            }
+        }
+        m_watcher.removeWatchedService(sender);
+        for (const auto &url : changed) {
+            emit updated(url);
+        }
+    }
+};
+
+TrayIcon::TrayIcon(QObject *parent) : QObject(parent), m_launcherAPI(LauncherAPI::instance()) {
+    connect(m_launcherAPI.data(), &LauncherAPI::updated, this, [this](const QString &url) {
+        if (url == m_launcherUrl) {
+            launcherAPIUpdate(url, m_launcherAPI->properties(url));
+        }
+    });
+    qGuiApp->installEventFilter(this);
     connect(this, &TrayIcon::xdgNameChanged, this, &TrayIcon::updateApplication);
     // Queue cache refreshes to avoid re-entering KService lookups.
     connect(KSycoca::self(), &KSycoca::databaseChanged, this, &TrayIcon::updateApplication, Qt::QueuedConnection);
@@ -22,7 +223,7 @@ TrayIcon::TrayIcon(QObject *parent) : QObject(parent) {
     });
 }
 
-TrayIcon::~TrayIcon() = default;
+TrayIcon::~TrayIcon() { m_launcherAPI->unwatch(m_launcherUrl); }
 
 void TrayIcon::setIcon(const QIcon newIcon) {
     if (m_icon.cacheKey() != newIcon.cacheKey()) {
@@ -40,84 +241,44 @@ void TrayIcon::setToolTipText(const QString toolTipText) {
 }
 
 void TrayIcon::launcherAPIUpdate(const QString &uri, const QMap<QString, QVariant> &properties) {
-
-    QString fixed_uri = uri;
-    if (!fixed_uri.startsWith(QLatin1String("application://"))) {
-        fixed_uri.prepend(QLatin1String("application://"));
-    }
-    if (!fixed_uri.endsWith(QLatin1String(".desktop"))) {
-        fixed_uri.append(QLatin1String(".desktop"));
-    }
-
-    // ignore signals from other applications
-    if (m_launcherUrl != fixed_uri) {
+    const QString url = normalizedLauncherUrl(uri);
+    if (url.isEmpty() || url != m_launcherUrl) {
         return;
     }
-
-    auto propertiesEnd = properties.constEnd();
-    auto foundCount = properties.constFind(QStringLiteral("count"));
-    if (foundCount != propertiesEnd) {
-        qint64 newCount = foundCount->toLongLong();
-        // 2 billion unread emails ought to be enough for anybody
-        if (newCount >= 0 && newCount <= std::numeric_limits<int>::max()) {
-            int saneCount = static_cast<int>(newCount);
-            if (saneCount != m_count) {
-                m_count = saneCount;
-                emit countChanged(saneCount);
-            }
-        }
+    const auto values = validatedLauncherProperties(properties);
+    if (values.contains(QStringLiteral("count"))) {
+        setCount(values.value(QStringLiteral("count")).toInt());
     }
-
-    auto foundCountVisible = properties.constFind(QStringLiteral("count-visible"));
-    if (foundCountVisible != propertiesEnd) {
-        bool newCountVisible = foundCountVisible->toBool();
-        if (newCountVisible != m_countVisible) {
-            m_countVisible = newCountVisible;
-            emit countVisibleChanged(newCountVisible);
-        }
+    if (values.contains(QStringLiteral("count-visible"))) {
+        setCountVisible(values.value(QStringLiteral("count-visible")).toBool());
     }
-
-    // the API gives us progress as 0..1 double but we'll use percent to avoid unnecessary
-    // changes when it just changed a fraction of a percent, hence not using our fancy updateLauncherProperty method
-    auto foundProgress = properties.constFind(QStringLiteral("progress"));
-    if (foundProgress != propertiesEnd) {
-        int newProgress = std::clamp(qRound(foundProgress->toDouble() * 100), 0, 100);
-        if (newProgress != m_progress) {
-            m_progress = newProgress;
-            emit progressChanged(newProgress);
-        }
+    if (values.contains(QStringLiteral("progress"))) {
+        setProgress(qRound(values.value(QStringLiteral("progress")).toDouble() * 100));
     }
-
-    auto foundProgressVisible = properties.constFind(QStringLiteral("progress-visible"));
-    if (foundProgressVisible != propertiesEnd) {
-        bool newProgressVisible = foundProgressVisible->toBool();
-        if (newProgressVisible != m_progressVisible) {
-            m_progressVisible = newProgressVisible;
-            emit progressVisibleChanged(newProgressVisible);
-        }
+    if (values.contains(QStringLiteral("progress-visible"))) {
+        setProgressVisible(values.value(QStringLiteral("progress-visible")).toBool());
     }
-
-    auto foundUrgent = properties.constFind(QStringLiteral("urgent"));
-    if (foundUrgent != propertiesEnd) {
-        bool newUrgent = foundUrgent->toBool();
-        if (newUrgent != m_urgent) {
-            m_urgent = newUrgent;
-            emit urgentChanged(newUrgent);
-        }
+    if (values.contains(QStringLiteral("urgent"))) {
+        setUrgent(values.value(QStringLiteral("urgent")).toBool());
     }
-
-    qDebug() << fixed_uri << properties;
-    qDebug() << "count: " << m_countVisible << " " << m_count;
-    qDebug() << "progress: " << m_progressVisible << " " << m_progress;
-    qDebug() << "urgent: " << m_urgent;
 }
 
 QString TrayIcon::launcherUrl() const { return m_launcherUrl; }
 
 void TrayIcon::setLauncherUrl(const QString &launcherUrl) {
-    if (launcherUrl != m_launcherUrl) {
-        m_launcherUrl = launcherUrl;
-        Q_EMIT launcherUrlChanged(launcherUrl);
+    const QString url = normalizedLauncherUrl(launcherUrl);
+    if (url != m_launcherUrl) {
+        m_launcherAPI->unwatch(m_launcherUrl);
+        m_launcherUrl = url;
+        const auto values = m_launcherAPI->watch(url);
+        // State belongs to the desktop ID, not to the window that used it before.
+        setCount(0);
+        setCountVisible(false);
+        setProgress(0);
+        setProgressVisible(false);
+        setUrgent(false);
+        launcherAPIUpdate(url, values);
+        Q_EMIT launcherUrlChanged(url);
     }
 }
 
@@ -175,6 +336,10 @@ void TrayIcon::setUrgent(bool urgent) {
 void TrayIcon::setXdgName(const QString id) {
     if (id != m_xdgName) {
         m_xdgName = id;
+        // Keep early updates while tray creation and desktop lookup are deferred.
+        if (!trayIcon) {
+            setLauncherUrl(QFileInfo(id).fileName());
+        }
         emit xdgNameChanged();
     }
 }
@@ -210,45 +375,27 @@ void TrayIcon::initializeTrayIcon() {
 
     connect(this, &TrayIcon::appNameChanged, this, [this]() { trayIcon->setTitle(m_appName); });
 
-    connect(this, &TrayIcon::iconChanged, this, &TrayIcon::updateBadges);
-
-    QDBusConnection::sessionBus().connect(QString(), QString(), "com.canonical.Unity.LauncherEntry", "Update", this,
-                                          SLOT(launcherAPIUpdate(QString, QMap<QString, QVariant>)));
-
-    connect(this, &TrayIcon::urgentChanged, this, [this]() {
-        if (m_urgent) {
-            trayIcon->setStatus(KStatusNotifierItem::NeedsAttention);
-        } else {
-            trayIcon->setStatus(KStatusNotifierItem::Active);
-        }
-    });
-
-    connect(this, &TrayIcon::demandsAttentionChanged, this, [this]() {
-        if (m_demandsAttention) {
-            trayIcon->setStatus(KStatusNotifierItem::NeedsAttention);
-        } else {
-            trayIcon->setStatus(KStatusNotifierItem::Active);
-        }
-    });
-
-    connect(this, &TrayIcon::countVisibleChanged, this, [this]() { updateBadges(); });
-    connect(this, &TrayIcon::progressVisibleChanged, this, [this]() { updateBadges(); });
-    connect(this, &TrayIcon::countChanged, this, [this]() { updateBadges(); });
-    connect(this, &TrayIcon::progressChanged, this, [this]() { updateBadges(); });
-    connect(this, &TrayIcon::countUseDotChanged, this, &TrayIcon::updateBadges);
+    connect(this, &TrayIcon::iconChanged, this, &TrayIcon::scheduleBadgeUpdate);
+    connect(this, &TrayIcon::urgentChanged, this, &TrayIcon::updateStatus);
+    connect(this, &TrayIcon::demandsAttentionChanged, this, &TrayIcon::updateStatus);
+    connect(this, &TrayIcon::countVisibleChanged, this, &TrayIcon::scheduleBadgeUpdate);
+    connect(this, &TrayIcon::progressVisibleChanged, this, &TrayIcon::scheduleBadgeUpdate);
+    connect(this, &TrayIcon::countChanged, this, &TrayIcon::scheduleBadgeUpdate);
+    connect(this, &TrayIcon::progressChanged, this, &TrayIcon::scheduleBadgeUpdate);
+    connect(this, &TrayIcon::countUseDotChanged, this, &TrayIcon::scheduleBadgeUpdate);
+    connect(this, &TrayIcon::countDisplayLimitChanged, this, &TrayIcon::scheduleBadgeUpdate);
 
     trayIcon->setContextMenu(m_menu);
     trayIcon->setToolTipTitle(m_toolTipText);
     trayIcon->setToolTipSubTitle(m_xdgName);
     trayIcon->setTitle(m_appName);
-    trayIcon->setStatus(KStatusNotifierItem::Active);
+    updateStatus();
 }
 
 void TrayIcon::updateApplication() {
     if (!trayIcon) {
         return;
     }
-
     // Resolve installed identities, never open a path supplied by a window.
     QString desktopId = QFileInfo(m_xdgName).fileName();
     if (!desktopId.isEmpty() && !desktopId.endsWith(QLatin1String(".desktop"))) {
@@ -282,7 +429,34 @@ void TrayIcon::updateApplication() {
     }
     setLauncherUrl(desktopId.isEmpty() ? QString() : QStringLiteral("application://") + desktopId);
     trayIcon->setToolTipSubTitle(m_xdgName);
-    updateBadges();
+    scheduleBadgeUpdate();
+}
+
+void TrayIcon::scheduleBadgeUpdate() {
+    if (m_badgeUpdatePending) {
+        return;
+    }
+    // Paint once after a batch of properties or rapid updates has settled.
+    m_badgeUpdatePending = true;
+    QTimer::singleShot(0, this, [this]() {
+        m_badgeUpdatePending = false;
+        updateBadges();
+    });
+}
+
+bool TrayIcon::eventFilter(QObject *watched, QEvent *event) {
+    if (watched == qGuiApp &&
+        (event->type() == QEvent::ApplicationPaletteChange || event->type() == QEvent::ApplicationFontChange)) {
+        scheduleBadgeUpdate();
+    }
+    return QObject::eventFilter(watched, event);
+}
+
+void TrayIcon::updateStatus() {
+    if (trayIcon) {
+        trayIcon->setStatus(m_urgent || m_demandsAttention ? KStatusNotifierItem::NeedsAttention
+                                                           : KStatusNotifierItem::Active);
+    }
 }
 
 void TrayIcon::updateBadges() {
@@ -290,82 +464,79 @@ void TrayIcon::updateBadges() {
         return;
     }
     const QIcon &baseIcon = m_desktopIcon.isNull() ? m_icon : m_desktopIcon;
-    if (m_countVisible || m_progressVisible) {
-        QSize maxIconSize;
-        for (const QSize &size : baseIcon.availableSizes()) {
-            if (size.height() > maxIconSize.height()) {
-                maxIconSize = size;
+    const bool showCount = m_countVisible && m_count > 0;
+    if (!showCount && !m_progressVisible) {
+        if (!m_desktopIconName.isEmpty()) {
+            trayIcon->setIconByName(m_desktopIconName);
+        } else {
+            // Absolute paths are images, not SNI theme names.
+            trayIcon->setIconByPixmap(baseIcon);
+        }
+        return;
+    }
+
+    const QString text = m_count > m_countDisplayLimit ? QString::number(m_countDisplayLimit) + QLatin1Char('+')
+                                                       : QString::number(m_count);
+    const QPalette palette = QGuiApplication::palette();
+    QIcon badgedIcon;
+    // Render each SNI size from the original icon, including HiDPI sizes.
+    for (const int size : {16, 22, 32, 48, 64, 128}) {
+        QPixmap original = baseIcon.pixmap(size, size);
+        if (original.isNull()) {
+            original = m_icon.pixmap(size, size);
+        }
+        if (original.isNull()) {
+            continue;
+        }
+        QPixmap canvas(size, size);
+        canvas.fill(Qt::transparent);
+        QPainter painter(&canvas);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform);
+        const QSize imageSize = original.size().scaled(canvas.size(), Qt::KeepAspectRatio);
+        painter.drawPixmap(QRect(QPoint((size - imageSize.width()) / 2, (size - imageSize.height()) / 2), imageSize),
+                           original);
+        const qreal unit = size / 22.0;
+        painter.setPen(Qt::NoPen);
+        if (m_progressVisible) {
+            const QRectF track(unit, size - 3 * unit, size - 2 * unit, 2 * unit);
+            painter.setBrush(palette.color(QPalette::Window));
+            painter.drawRoundedRect(track, unit, unit);
+            if (m_progress > 0) {
+                painter.setBrush(palette.color(QPalette::Highlight));
+                painter.drawRoundedRect(
+                    QRectF(track.topLeft(), QSizeF(track.width() * m_progress / 100.0, track.height())), unit, unit);
             }
         }
-        if (maxIconSize.isEmpty()) {
-            maxIconSize = QSize(64, 64);
+        if (showCount) {
+            painter.setPen(QPen(palette.color(QPalette::Window), unit));
+            painter.setBrush(palette.color(QPalette::Highlight));
+            if (m_countUseDot) {
+                painter.drawEllipse(QRectF(size - 6 * unit, unit, 5 * unit, 5 * unit));
+            } else {
+                QFont font = QGuiApplication::font();
+                font.setWeight(QFont::Bold);
+                font.setPixelSize(qMax(1, qRound(size * 0.42)));
+                const qreal padding = 1.2 * unit;
+                const qreal available = size - 2 * unit - 2 * padding;
+                const qreal width = QFontMetricsF(font).horizontalAdvance(text);
+                if (width > available) {
+                    font.setPixelSize(qMax(1, static_cast<int>(font.pixelSize() * available / width)));
+                }
+                const QFontMetricsF metrics(font);
+                const qreal badgeHeight = qMin(size - 2 * unit, metrics.height() + 2 * unit);
+                const qreal badgeWidth = qMax(badgeHeight, metrics.horizontalAdvance(text) + 2 * padding);
+                const QRectF badge(size - badgeWidth - unit, unit, badgeWidth, badgeHeight);
+                painter.drawRoundedRect(badge, badgeHeight / 2, badgeHeight / 2);
+                painter.setFont(font);
+                painter.setPen(palette.color(QPalette::HighlightedText));
+                painter.drawText(badge, Qt::AlignCenter, text);
+            }
         }
-        // Bound badge rendering for unusually large source icons.
-        QPixmap basePixmap = baseIcon.pixmap(maxIconSize.boundedTo(QSize(256, 256)));
-        if (basePixmap.isNull()) {
-            trayIcon->setIconByPixmap(m_icon);
-            return;
-        }
-        const float dynamicScaling = basePixmap.height() / 22.0;
-        QRect pixmapRect = basePixmap.rect();
-        QPainter painter(&basePixmap);
-        painter.setRenderHint(QPainter::Antialiasing);
-        painter.setRenderHint(QPainter::TextAntialiasing);
-
-        if (m_countVisible && m_count > 0 && !m_countUseDot) {
-            QFont font;
-            font.setWeight(QFont::Weight::Bold);
-            font.setLetterSpacing(QFont::AbsoluteSpacing, -4.0);
-            QFontMetrics metrics(font);
-            const int alignFlags = Qt::AlignTop | Qt::AlignRight | Qt::TextDontClip;
-            QString text = QString::number(m_count);
-            font.setPixelSize(12);
-            double scaleFactor = static_cast<double>(basePixmap.width()) / metrics.tightBoundingRect(text).width();
-            font.setPixelSize(
-                std::min(static_cast<int>(font.pixelSize() * scaleFactor), static_cast<int>(basePixmap.height() * .6)));
-            painter.setFont(font);
-            painter.setPen(Qt::black);
-            painter.drawText(
-                pixmapRect.adjusted(-1 * dynamicScaling, 1 * dynamicScaling, -1 * dynamicScaling, 1 * dynamicScaling),
-                alignFlags, text);
-            painter.setPen(Qt::black);
-            painter.drawText(
-                pixmapRect.adjusted(1 * dynamicScaling, 1 * dynamicScaling, 1 * dynamicScaling, 1 * dynamicScaling),
-                alignFlags, text);
-            painter.setPen(Qt::white);
-            painter.drawText(pixmapRect, alignFlags, text);
-        }
-
-        if (m_countVisible && m_count > 0 && m_countUseDot) {
-            int borderWidth = static_cast<int>(2 * dynamicScaling);
-            int circleRadius = static_cast<int>(3 * dynamicScaling);
-            int shadowRadius = circleRadius + borderWidth;
-            QPoint circlePos =
-                QPoint(pixmapRect.topRight() + QPoint(-circleRadius - borderWidth, circleRadius + borderWidth));
-
-            painter.setCompositionMode(QPainter::CompositionMode_Clear);
-            painter.setBrush(Qt::black);
-            painter.drawEllipse(circlePos, shadowRadius, shadowRadius);
-            painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
-            painter.setBrush(QColor("#E93D57"));
-            painter.drawEllipse(circlePos, circleRadius, circleRadius);
-        }
-
-        if (m_progressVisible && m_progress > 0) {
-            const int barHeight = static_cast<int>(1 * dynamicScaling);
-            QRect progressBarRect(0, basePixmap.height() - barHeight, basePixmap.width() * m_progress / 100, barHeight);
-            painter.setBrush(QColor(0, 255, 0, 255));
-            painter.setPen(Qt::NoPen);
-            painter.drawRect(progressBarRect);
-        }
-
-        trayIcon->setIconByPixmap(basePixmap);
-    } else if (!m_desktopIconName.isEmpty()) {
-        trayIcon->setIconByName(m_desktopIconName);
-    } else {
-        // Absolute paths are images, not SNI theme names.
-        trayIcon->setIconByPixmap(baseIcon);
+        painter.end();
+        badgedIcon.addPixmap(canvas);
     }
+    trayIcon->setIconByPixmap(badgedIcon.isNull() ? m_icon : badgedIcon);
 }
 
 void TrayIcon::setDemandsAttention(bool demandsAttention) {
@@ -381,3 +552,13 @@ void TrayIcon::setCountUseDot(bool countUseDot) {
         emit countUseDotChanged();
     }
 }
+
+void TrayIcon::setCountDisplayLimit(int limit) {
+    limit = std::clamp(limit, 1, 9999);
+    if (m_countDisplayLimit != limit) {
+        m_countDisplayLimit = limit;
+        emit countDisplayLimitChanged();
+    }
+}
+
+#include "trayicon.moc"

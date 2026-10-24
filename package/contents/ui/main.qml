@@ -8,9 +8,13 @@ Item {
     property bool debugEnabled: KWin.readConfig("debugEnabled", false)
     property var hideByDefaultClass: Utils.commaSeparate(KWin.readConfig("hideByDefaultClass", ""))
     property bool countUseDot: KWin.readConfig("countUseDot", false)
+    property int countDisplayLimit: KWin.readConfig("countDisplayLimit", 99)
     property bool hideOnMinimize: KWin.readConfig("hideOnMinimize", false)
     property var trayIcons: new Object()
-    readonly property Component trayIconComponent: TrayIcon {}
+    readonly property Component trayIconComponent: TrayIcon {
+        countUseDot: root.countUseDot
+        countDisplayLimit: root.countDisplayLimit
+    }
 
     ShortcutHandler {
         name: "Minimize to tray"

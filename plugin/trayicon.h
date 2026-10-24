@@ -8,9 +8,11 @@
 #include <QIcon>
 #include <QMenu>
 #include <QObject>
+#include <QSharedPointer>
 #include <QUuid>
 
 class KStatusNotifierItem;
+class LauncherAPI;
 
 class TrayIcon : public QObject {
     Q_OBJECT
@@ -21,6 +23,7 @@ class TrayIcon : public QObject {
     Q_PROPERTY(QString xdgName READ xdgName WRITE setXdgName NOTIFY xdgNameChanged)
     Q_PROPERTY(bool demandsAttention READ demandsAttention WRITE setDemandsAttention NOTIFY demandsAttentionChanged)
     Q_PROPERTY(bool countUseDot READ countUseDot WRITE setCountUseDot NOTIFY countUseDotChanged)
+    Q_PROPERTY(int countDisplayLimit READ countDisplayLimit WRITE setCountDisplayLimit NOTIFY countDisplayLimitChanged)
 
     Q_PROPERTY(int count READ count NOTIFY countChanged)
     Q_PROPERTY(bool countVisible READ countVisible NOTIFY countVisibleChanged)
@@ -52,6 +55,7 @@ class TrayIcon : public QObject {
     void xdgNameChanged();
     void demandsAttentionChanged();
     void countUseDotChanged();
+    void countDisplayLimitChanged();
 
     void launcherUrlChanged(const QString &launcherUrl);
     void countChanged(int count);
@@ -65,6 +69,7 @@ class TrayIcon : public QObject {
     void launcherAPIUpdate(const QString &uri, const QMap<QString, QVariant> &properties);
 
   private:
+    QSharedPointer<LauncherAPI> m_launcherAPI;
     KStatusNotifierItem *trayIcon = nullptr;
     QMenu *m_menu = nullptr;
     QIcon m_icon;
@@ -86,12 +91,19 @@ class TrayIcon : public QObject {
     QString appName() const { return m_appName; }
     void updateApplication();
     void updateBadges();
+    void scheduleBadgeUpdate();
+    void updateStatus();
+    bool eventFilter(QObject *watched, QEvent *event) override;
+    bool m_badgeUpdatePending = false;
     bool m_demandsAttention = false;
     bool demandsAttention() const { return m_demandsAttention; }
     void setDemandsAttention(bool demandsAttention);
     bool m_countUseDot = false;
     bool countUseDot() const { return m_countUseDot; }
     void setCountUseDot(bool countUseDot);
+    int m_countDisplayLimit = 99;
+    int countDisplayLimit() const { return m_countDisplayLimit; }
+    void setCountDisplayLimit(int limit);
 
     void setCount(int count);
     void setCountVisible(bool countVisible);

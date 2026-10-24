@@ -21,11 +21,13 @@ Hide windows to the system tray, similar to [KDocker](https://github.com/user-no
 - Uses the desktop-file icon, including user overrides, with the window icon as fallback
 - Application and window status
   - [Unity LauncherAPI](https://wiki.ubuntu.com/Unity/LauncherAPI)
-    - Counter: Top-right corner (optional dot style can be enabled from KWin script settings)
-    - Progress bar: Green bottom bar
+    - Counter: Top-right corner, with a configurable display limit (default `99+`) and optional dot style
+    - Progress bar: Bottom bar using the system highlight color
     - Urgent: Sets *[NeedsAttention](https://api.kde.org/plasma-types.html#ItemStatus-enum)* status of icon
 
     **Note:** Unity LauncherAPI doesn't specify a window so all the tray icons from the same application will get the same status
+
+    Counters must be supplied by the application. Notification history, tray images and tooltips are not treated as unread counts.
 
   - *[Demands attention](https://invent.kde.org/plasma/kwin/-/blob/fc98b4bcbd80ba025994c2d31244d984a253ec66/src/window.h#L429)* from KWin will also set *[NeedsAttention](https://api.kde.org/plasma-types.html#ItemStatus-enum)* status of icon and works per window.
 

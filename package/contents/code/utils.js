@@ -86,7 +86,7 @@ function addTrayIcon(window) {
         "windowId": windowId,
         "toolTipText": formattedWindowInfo(window),
         "xdgName": window.desktopFileName,
-        "countUseDot": countUseDot
+        "demandsAttention": window.demandsAttention
     });
     trayItem.requestShowHide.connect(toggleShowHide);
     trayItem.requestClose.connect(closeWindow);
