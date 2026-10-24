@@ -9,7 +9,7 @@
         ],
         "BugReportUrl": "https://github.com/luisbocanegra/kwin-minimize2tray/issues",
         "Description": "Minimize active window to the System tray and skip Taskbar, Switcher and Pager",
-        "EnabledByDefault": true,
+        "EnabledByDefault": false,
         "Id": "com.github.luisbocanegra.minimize2tray",
         "License": "GPL",
         "Name": "Minimize to Tray",

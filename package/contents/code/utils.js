@@ -140,6 +140,8 @@ function getWindow(windowId) {
 
 function closeWindow(windowId) {
     const window = getWindow(windowId);
+    if (!window) return;
+
     window.closeWindow();
 }
 

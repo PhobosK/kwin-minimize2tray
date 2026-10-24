@@ -7,7 +7,7 @@
 
   <group name="">
     <entry name="debugEnabled" type="Bool">
-      <default>true</default>
+      <default>false</default>
     </entry>
     <entry name="hideByDefaultClass" type="String">
       <label>Automatically hide windows with certain classes(comma-separated list)</label>

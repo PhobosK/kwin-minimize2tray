@@ -48,7 +48,7 @@ void TrayIcon::launcherAPIUpdate(const QString &uri, const QMap<QString, QVarian
     if (foundCount != propertiesEnd) {
         qint64 newCount = foundCount->toLongLong();
         // 2 billion unread emails ought to be enough for anybody
-        if (newCount < std::numeric_limits<int>::max()) {
+        if (newCount >= 0 && newCount <= std::numeric_limits<int>::max()) {
             int saneCount = static_cast<int>(newCount);
             if (saneCount != m_count) {
                 m_count = saneCount;
@@ -70,7 +70,7 @@ void TrayIcon::launcherAPIUpdate(const QString &uri, const QMap<QString, QVarian
     // changes when it just changed a fraction of a percent, hence not using our fancy updateLauncherProperty method
     auto foundProgress = properties.constFind(QStringLiteral("progress"));
     if (foundProgress != propertiesEnd) {
-        int newProgress = qRound(foundProgress->toDouble() * 100);
+        int newProgress = std::clamp(qRound(foundProgress->toDouble() * 100), 0, 100);
         if (newProgress != m_progress) {
             m_progress = newProgress;
             emit progressChanged(newProgress);
@@ -175,7 +175,7 @@ void TrayIcon::initializeTrayIcon() {
 
     qDebug() << "New Tray Icon" << m_xdgName;
     trayIcon = new KStatusNotifierItem(m_xdgName, this);
-    QMenu *m_menu = new QMenu();
+    m_menu = new QMenu();
 
     QAction *showAction = new QAction("Show/Hide", m_menu);
     connect(showAction, &QAction::triggered, this, [this]() { emit requestShowHide(m_windowId); });
