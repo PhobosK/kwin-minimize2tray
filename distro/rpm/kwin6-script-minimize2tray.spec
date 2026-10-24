@@ -4,34 +4,50 @@
 # SPDX-License-Identifier: GPL-3.0-only
 #
 
-%global upstream_version 0.1.0
+# Use --with upstream to build the original repository.
+%bcond_with upstream
 
-# Immutable upstream Git revision.
-%global commit f5e8d140a6660324cafa2188350c858134c80ab2
-%global shortcommit %(echo %{commit} | cut -c1-7)
+# Release version shared by the RPM and About metadata.
+%{!?upstream_version:%global upstream_version 0.1.0}
+%{!?tag:%global tag v%{upstream_version}}
 
-# Number of commits after the v0.1.0 tag.
-# Increment/update this when moving to a newer upstream commit.
-%global commit_offset 3
+# Set commit to a full SHA to use a fixed revision instead of the release tag.
+%{!?commit:%global commit %{nil}}
+
+%if %{with upstream}
+%global source_owner luisbocanegra
+%else
+%global source_owner PhobosK
+%endif
+
+%if "%{commit}" != ""
+%global source_ref %{commit}
+%global archive_ref %{commit}
+%else
+%global source_ref refs/tags/%{tag}
+%global archive_ref %{tag}
+%endif
 
 Name:           kwin6-script-minimize2tray
-Version:        %{upstream_version}+git%{commit_offset}.%{shortcommit}
+Version:        %{upstream_version}
+# Bump Release when packaging another commit at the same version.
 Release:        0.phobosk
 Summary:        KDE Plasma 6 KWin script to minimize arbitrary windows to the system tray
 License:        GPL-3.0-only
 Group:          System/GUI/KDE
-URL:            https://github.com/luisbocanegra/kwin-minimize2tray
+URL:            https://github.com/%{source_owner}/kwin-minimize2tray
 
-# Pin the source archive to an immutable commit instead of the moving main branch.
-Source0:        %{url}/archive/%{commit}.tar.gz#/%{name}-%{version}.tar.gz
+# Keep downloaded archives distinct when changing repository or revision.
+Source0:        %{url}/archive/%{source_ref}.tar.gz#/%{name}-%{source_owner}-%{archive_ref}.tar.gz
 
-BuildRequires:  cmake >= 3.16
-BuildRequires:  extra-cmake-modules >= 6.0.0
+BuildRequires:  cmake >= 3.19
 BuildRequires:  gcc-c++
+BuildRequires:  kf6-extra-cmake-modules >= 6.0.0
 BuildRequires:  cmake(Qt6DBus) >= 6.6.0
 BuildRequires:  cmake(Qt6Gui) >= 6.6.0
 BuildRequires:  cmake(Qt6Qml) >= 6.6.0
 BuildRequires:  cmake(Qt6Widgets) >= 6.6.0
+# Required by the original build system.
 BuildRequires:  cmake(KF6Package) >= 6.0.0
 BuildRequires:  cmake(KF6Service) >= 6.0.0
 BuildRequires:  cmake(KF6StatusNotifierItem) >= 6.0.0
@@ -40,17 +56,21 @@ Requires:       plasma6-workspace >= 6.0.0
 
 %description
 Minimize2Tray is a KDE Plasma 6 KWin script plus QML plugin that can hide
-minimizable windows from the normal task switcher, task manager and pager,
-and expose restore and close actions through status notifier tray icons.
+windows from the task switcher, task manager and pager, and expose restore
+and close actions through status notifier tray icons.
 
 %prep
-# GitHub may name commit archives using the resolved full SHA. Extracting into
-# our own directory avoids depending on the archive's top-level directory name.
+# Tag and commit archives have different top-level directory names.
 %setup -q -c -T
-tar -xzf %{SOURCE0} --strip-components=1
+tar -xzf "%{SOURCE0}" --strip-components=1
+
+# Older upstream sources read the About version directly from metadata.
+sed -i -E 's/("Version"[[:space:]]*:[[:space:]]*")[^"]*/\1%{upstream_version}/' package/metadata.json
 
 %build
 %cmake \
+  -DMINIMIZE2TRAY_VERSION:STRING="%{upstream_version}" \
+  -DKDE_INSTALL_QMLDIR:PATH=%{_libdir}/qt6/qml \
   -DBUILD_PLUGIN=ON \
   -DINSTALL_SCRIPT=ON \
   -DPACKAGE_SCRIPT=OFF
@@ -67,3 +87,5 @@ tar -xzf %{SOURCE0} --strip-components=1
 %{_libdir}/qt6/qml/com/github/luisbocanegra/trayicon/
 
 %changelog
+* Sat Oct 24 2026 PhobosK
+- Support release tags and pinned commits from the fork or upstream.
