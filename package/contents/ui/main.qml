@@ -36,4 +36,8 @@ Item {
         Workspace.windowRemoved.connect(window => Utils.removeTrayIcon(window));
         Workspace.windows.forEach(window => Utils.setup(window));
     }
+
+    Component.onDestruction: {
+        Utils.restoreManagedWindows();
+    }
 }

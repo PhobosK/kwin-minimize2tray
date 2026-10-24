@@ -106,6 +106,34 @@ function removeTrayIcon(window) {
     delete trayIcons[windowId];
 }
 
+function restoreManagedWindows() {
+    const managedWindowIds = Object.keys(trayIcons);
+
+    Workspace.windows.forEach(window => {
+        const windowId = window.internalId;
+        if (!(windowId in trayIcons)) {
+            return;
+        }
+
+        /*
+         * Drop ownership before changing KWin state. The skip-state guard
+         * must not reapply the hidden state while the script is unloading.
+         */
+        delete trayIcons[windowId];
+        setSkip(false, window);
+        setMinimize(false, window);
+    });
+
+    /*
+     * windowRemoved normally cleans stale entries. Clear any that remain
+     * defensively; their tray objects are children of root and are already
+     * being destroyed with it.
+     */
+    managedWindowIds.forEach(windowId => {
+        delete trayIcons[windowId];
+    });
+}
+
 function setMinimize(minimize, window) {
     window.minimized = minimize;
 }
