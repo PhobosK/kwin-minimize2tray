@@ -6,11 +6,13 @@ import "../code/utils.js" as Utils
 Item {
     id: root
     property bool debugEnabled: false
-    property var hideByDefaultClass: []
     property bool countUseDot: false
     property int countDisplayLimit: 99
     property bool hideOnMinimize: false
     property var trayIcons: new Object()
+    property var automaticMatches: new Object()
+    property var trackedWindows: new Object()
+    property var pendingWindows: new Object()
     readonly property Component trayIconComponent: TrayIcon {
         countUseDot: root.countUseDot
         countDisplayLimit: root.countDisplayLimit
@@ -19,30 +21,22 @@ Item {
     ScriptConfig {
         id: scriptConfig
         onValuesChanged: root.reloadConfig()
+        onWindowsRequested: scriptConfig.setWindows(Workspace.windows.map(window => Utils.windowInfo(window)))
     }
 
     function reloadConfig() {
-        const previousClasses = hideByDefaultClass;
         const config = scriptConfig.values;
         debugEnabled = config.debugEnabled;
-        hideByDefaultClass = Utils.commaSeparate(config.hideByDefaultClass);
         countUseDot = config.countUseDot;
         countDisplayLimit = config.countDisplayLimit;
         hideOnMinimize = config.hideOnMinimize;
+        Workspace.windows.forEach(window => Utils.scheduleWindow(window));
+    }
 
-        // Only new matches should hide windows the user may have restored.
-        Workspace.windows.forEach(window => {
-            const wasMatched = Utils.matchesAutoHide(window, previousClasses);
-            const isMatched = Utils.matchesAutoHide(window, hideByDefaultClass);
-            if (wasMatched && !isMatched && window.internalId in trayIcons) {
-                // Drop ownership before the skip-state guard can run.
-                Utils.removeTrayIcon(window);
-                Utils.setSkip(false, window);
-                Utils.setMinimize(false, window);
-            } else if (!wasMatched && isMatched) {
-                Utils.setupAutoHide(window);
-            }
-        });
+    Timer {
+        id: reconcileTimer
+        interval: 0
+        onTriggered: Utils.reconcileWindows()
     }
 
     ShortcutHandler {
@@ -51,7 +45,8 @@ Item {
         sequence: "Meta+Alt+PgDown"
         onActivated: {
             let window = Workspace.activeWindow;
-            while (window.transient) {
+            if (!window || Utils.isProtectedWindow(window)) return;
+            while (window && window.transient) {
                 window = window.transientFor;
             }
             if (!Utils.isValidWindow(window))
@@ -63,10 +58,13 @@ Item {
 
     Component.onCompleted: {
         Workspace.windowAdded.connect(window => Utils.setup(window));
-        Workspace.windowAdded.connect(window => {
-            Utils.setupAutoHide(window);
+        Workspace.windowAdded.connect(window => Utils.scheduleWindow(window));
+        Workspace.windowRemoved.connect(window => {
+            Utils.removeTrayIcon(window);
+            delete automaticMatches[window.internalId];
+            delete trackedWindows[window.internalId];
+            delete pendingWindows[window.internalId];
         });
-        Workspace.windowRemoved.connect(window => Utils.removeTrayIcon(window));
         Workspace.windows.forEach(window => Utils.setup(window));
         reloadConfig();
     }

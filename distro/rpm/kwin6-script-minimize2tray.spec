@@ -49,6 +49,7 @@ BuildRequires:  cmake(Qt6Qml) >= 6.6.0
 BuildRequires:  cmake(Qt6Widgets) >= 6.6.0
 # Required by the original build system.
 BuildRequires:  cmake(KF6Package) >= 6.0.0
+BuildRequires:  cmake(KF6KCMUtils) >= 6.0.0
 BuildRequires:  cmake(KF6Service) >= 6.0.0
 BuildRequires:  cmake(KF6StatusNotifierItem) >= 6.0.0
 Requires:       kwin6 >= 6.0.0
@@ -79,8 +80,13 @@ sed -i -E 's/("Version"[[:space:]]*:[[:space:]]*")[^"]*/\1%{upstream_version}/' 
 
 %install
 %cmake_install
+# Older fork/upstream archives do not ship the native configuration module.
+: > minimize2tray-config.files
+if test -f "%{buildroot}%{_libdir}/qt6/plugins/kwin/effects/configs/kcm_minimize2tray.so"; then
+    echo "%{_libdir}/qt6/plugins/kwin/effects/configs/kcm_minimize2tray.so" > minimize2tray-config.files
+fi
 
-%files
+%files -f minimize2tray-config.files
 %license LICENSE
 %doc README.md CONTRIBUTING.md
 %{_datadir}/kwin/scripts/com.github.luisbocanegra.minimize2tray/

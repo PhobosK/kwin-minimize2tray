@@ -46,12 +46,13 @@ cd kwin-minimize2tray
 ### Immutable distributions
 
 1. Run `./install-immutable.sh` to install
-2. Add `QML_IMPORT_PATH` environment variable for the C++ plugin to work:
+2. Add the QML and Qt plugin paths so the tray and native configuration modules can be found:
 
     Create the file `~/.config/plasma-workspace/env/path.sh` (and folders if they don't exist) with the following:
 
     ```sh
     export QML_IMPORT_PATH="$HOME/.local/lib64/qml:$HOME/.local/lib/qml:$QML_IMPORT_PATH"
+    export QT_PLUGIN_PATH="$HOME/.local/lib64/plugins:$HOME/.local/lib/plugins:$QT_PLUGIN_PATH"
     ```
 
 3. Log-out or reboot to apply the change
@@ -74,8 +75,15 @@ By default the shortcut is set to `Meta+Alt+PgDown`, to change it:
 2. From the list on the left select *KWin*
 3. Search for "Minimize window to tray" and change it to whatever you prefer
 
-Configuration changes take effect automatically after clicking **Apply** or **OK**. Newly matching open windows are hidden immediately, and badge settings update existing tray icons.
-Windows that no longer match any configured class are restored automatically and their tray icons are removed.
+Open the script's configuration and use **Add rule → Detect window properties** to select an application window. Give the rule a name and description, then choose the detected properties that identify the windows to hide. Each rule can be edited, enabled, disabled or deleted; search covers names, descriptions and matching properties. **View as text** shows all rules as read-only JSON, with copy and save options.
+
+New rules default to normal application windows and leave child windows and dialogs visible. Separate editors can also be normal windows: use a detected role, instance or title to distinguish them. A preview lists matching open windows and reasons for exclusions. Matching is case-sensitive; selected conditions are combined with AND, and enabled rules with OR. Modal dialogs, system surfaces, Minimize2Tray itself and its configuration hosts (System Settings and kcmshell6) cannot be hidden, including through the shortcut. Other dialog/utility windows require explicit rules.
+
+Edits remain pending until **Apply** or **OK** on the main configuration page. Newly matching open windows are hidden immediately; disabling, deleting or narrowing their last matching rule restores them and removes their tray icons. Badge settings update existing icons. Deletions can be undone before applying, and Cancel discards pending edits. To preview open windows, the script must be enabled; window detection also works while it is disabled.
+
+Previous comma-separated class settings migrate automatically on first use. The original list is retained as `legacyClassBackup` in the same `kwinrc` script group; imported rules preserve class-or-instance matching and do not guess missing roles. An empty new rule list remains empty. Invalid or unsupported JSON is reported rather than overwritten; the running script keeps its last valid rules. Concurrent edits are detected before saving.
+
+Dialog sizes, page selection, search and selected rule are remembered in the existing script configuration group. Window position restoration is supported on X11; Wayland placement remains controlled by KWin. The native configuration module is built and installed alongside the tray plugin and requires KF6 KCMUtils development files. After installing updated native plugins, start a new Plasma session once before live checks.
 
 ## Acknowledgements
 

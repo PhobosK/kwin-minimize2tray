@@ -9,7 +9,7 @@ function commaSeparate(string) {
 }
 
 function isValidWindow(window) {
-    return window.minimizable && window.normalWindow &&
+    return window && !isProtectedWindow(window) && window.minimizable && window.normalWindow &&
         !window.dialog && !window.modal && !window.specialWindow &&
         !window.appletPopup && !window.splash && !window.utility && !window.transient;
 }
@@ -24,10 +24,17 @@ function dumpProps(obj) {
 }
 
 function setup(window) {
-    if (!isValidWindow(window)) return;
+    if (window.internalId in trackedWindows) return;
+    trackedWindows[window.internalId] = true;
     window.captionChanged.connect(() => {
         updateToolTip(window);
+        scheduleWindow(window);
     });
+    window.windowClassChanged.connect(() => scheduleWindow(window));
+    window.windowRoleChanged.connect(() => scheduleWindow(window));
+    window.transientChanged.connect(() => scheduleWindow(window));
+    window.modalChanged.connect(() => scheduleWindow(window));
+    window.minimizeableChanged.connect(() => scheduleWindow(window));
     window.desktopsChanged.connect(() => {
         updateToolTip(window);
     });
@@ -55,6 +62,7 @@ function setup(window) {
     });
     window.desktopFileNameChanged.connect(() => {
         updateWindowIcon(window);
+        scheduleWindow(window);
     });
 }
 
@@ -77,6 +85,7 @@ function formattedWindowInfo(w) {
 }
 
 function addTrayIcon(window) {
+    if (isProtectedWindow(window)) return;
     const windowId = window.internalId;
     if (windowId in trayIcons) {
         return;
@@ -233,14 +242,48 @@ function updateDemandsAttention(window) {
     }
 }
 
-function matchesAutoHide(window, classes) {
-    return isValidWindow(window) &&
-        (classes.includes(window.resourceName) || classes.includes(window.resourceClass));
+function windowInfo(window) {
+    return {
+        uuid: window.internalId.toString(),
+        resourceClass: window.resourceClass,
+        resourceName: window.resourceName,
+        desktopFile: window.desktopFileName,
+        role: window.windowRole || "",
+        caption: window.caption,
+        type: window.normalWindow ? "normal" : window.dialog ? "dialog" : window.utility ? "utility" : "other",
+        hasTransientParent: window.transient,
+        modal: window.modal,
+        specialWindow: window.specialWindow || window.appletPopup || window.splash,
+        minimizable: window.minimizable
+    };
 }
 
-function setupAutoHide(window) {
-    if (!matchesAutoHide(window, hideByDefaultClass)) return;
-    addTrayIcon(window);
-    setMinimize(true, window);
-    enforceTrayManagedState(window);
+function isProtectedWindow(window) {
+    return window && scriptConfig.isProtected(windowInfo(window));
+}
+
+function scheduleWindow(window) {
+    pendingWindows[window.internalId] = true;
+    reconcileTimer.restart();
+}
+
+function reconcileWindows() {
+    const pending = pendingWindows;
+    pendingWindows = new Object();
+    Workspace.windows.forEach(window => {
+        if (!(window.internalId in pending)) return;
+        const windowId = window.internalId;
+        const wasMatched = automaticMatches[windowId] === true;
+        const isMatched = scriptConfig.matchingRules(windowInfo(window)).length > 0;
+        automaticMatches[windowId] = isMatched;
+        if ((wasMatched && !isMatched || isProtectedWindow(window)) && windowId in trayIcons) {
+            removeTrayIcon(window);
+            setSkip(false, window);
+            setMinimize(false, window);
+        } else if (isMatched && !wasMatched) {
+            addTrayIcon(window);
+            setMinimize(true, window);
+            enforceTrayManagedState(window);
+        }
+    });
 }

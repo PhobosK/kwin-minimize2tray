@@ -1,0 +1,10 @@
+{
+    "KPlugin": {
+        "Name": "Minimize to Tray",
+        "Description": "Configure window rules and tray icons",
+        "Icon": "view-visible",
+        "License": "GPL",
+        "Authors": [{"Name": "Luis Bocanegra", "Email": "luisbocanegra17b@gmail.com"}],
+        "OtherContributors": [{"Name": "PhobosK", "Task": "Fork development and improvements"}]
+    }
+}
