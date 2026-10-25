@@ -233,10 +233,14 @@ function updateDemandsAttention(window) {
     }
 }
 
+function matchesAutoHide(window, classes) {
+    return isValidWindow(window) &&
+        (classes.includes(window.resourceName) || classes.includes(window.resourceClass));
+}
+
 function setupAutoHide(window) {
-    if (!isValidWindow(window)) return;
-    if (hideByDefaultClass.includes(window.resourceName) || hideByDefaultClass.includes(window.resourceClass)) {
-        toggleShowHide(window.internalId);
-        addTrayIcon(window);
-    }
+    if (!matchesAutoHide(window, hideByDefaultClass)) return;
+    addTrayIcon(window);
+    setMinimize(true, window);
+    enforceTrayManagedState(window);
 }

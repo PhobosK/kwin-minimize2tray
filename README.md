@@ -74,8 +74,8 @@ By default the shortcut is set to `Meta+Alt+PgDown`, to change it:
 2. From the list on the left select *KWin*
 3. Search for "Minimize window to tray" and change it to whatever you prefer
 
-> [!IMPORTANT]
-> Due to a limitation in KWin, you will need to log out and back in after changing the configuration of the script for it to work properly.
+Configuration changes take effect automatically after clicking **Apply** or **OK**. Newly matching open windows are hidden immediately, and badge settings update existing tray icons.
+Windows that no longer match any configured class are restored automatically and their tray icons are removed.
 
 ## Acknowledgements
 
