@@ -1,8 +1,13 @@
 #include "scriptconfig.h"
 #include "rules.h"
 
+#include <KAboutPluginDialog>
+#include <KCMultiDialog>
+#include <KPluginMetaData>
 #include <QDBusConnection>
 #include <QDebug>
+#include <QDialog>
+#include <QMessageBox>
 #include <QStandardPaths>
 
 ScriptConfig::ScriptConfig(QObject *parent) : QObject(parent), m_config(QStringLiteral("kwinrc")) {
@@ -21,6 +26,8 @@ ScriptConfig::ScriptConfig(QObject *parent) : QObject(parent), m_config(QStringL
 }
 
 ScriptConfig::~ScriptConfig() {
+    delete m_configDialog.data();
+    delete m_aboutDialog.data();
     if (m_registered) {
         QDBusConnection::sessionBus().unregisterObject(QStringLiteral("/Minimize2Tray"));
     }
@@ -61,4 +68,52 @@ QStringList ScriptConfig::matchingRules(const QVariantMap &window) const {
 QVariantList ScriptConfig::windows() {
     Q_EMIT windowsRequested();
     return m_windows;
+}
+
+void ScriptConfig::showDialog(QDialog *dialog, const QString &role) {
+    dialog->setAttribute(Qt::WA_QuitOnClose, false);
+    dialog->setWindowRole(QStringLiteral("minimize2tray-") + role);
+    dialog->show();
+    dialog->raise();
+    dialog->activateWindow();
+}
+
+void ScriptConfig::showAbout() {
+    if (!m_aboutDialog) {
+        const auto path =
+            QStandardPaths::locate(QStandardPaths::GenericDataLocation,
+                                   QStringLiteral("kwin/scripts/") + QString::fromLatin1(Minimize2Tray::ScriptId) +
+                                       QStringLiteral("/metadata.json"));
+        const auto metadata = KPluginMetaData::fromJsonFile(path);
+        if (metadata.isValid() && metadata.pluginId() == QLatin1String(Minimize2Tray::ScriptId)) {
+            m_aboutDialog = new KAboutPluginDialog(metadata);
+        } else {
+            m_aboutDialog =
+                new QMessageBox(QMessageBox::Warning, tr("Minimize to Tray"),
+                                tr("The installed Minimize2Tray metadata could not be loaded."), QMessageBox::Close);
+        }
+        m_aboutDialog->setAttribute(Qt::WA_DeleteOnClose);
+    }
+    showDialog(m_aboutDialog.data(), QStringLiteral("about"));
+}
+
+void ScriptConfig::configure() {
+    if (!m_configDialog) {
+        const auto metadata = KPluginMetaData::findPluginById(QStringLiteral("kwin/effects/configs"),
+                                                              QStringLiteral("kcm_minimize2tray"));
+        if (metadata.isValid()) {
+            auto dialog = new KCMultiDialog;
+            dialog->setWindowTitle(tr("Configure Minimize to Tray"));
+            // Use the same full module and arguments as the KWin Scripts configuration host.
+            dialog->addModule(metadata, {QString::fromLatin1(Minimize2Tray::ScriptId), QStringLiteral("KWin/Script")});
+            m_configDialog = dialog;
+        } else {
+            m_configDialog = new QMessageBox(QMessageBox::Warning, tr("Minimize to Tray"),
+                                             tr("The Minimize2Tray configuration module could not be loaded. Check "
+                                                "that the native plugins are installed."),
+                                             QMessageBox::Close);
+        }
+        m_configDialog->setAttribute(Qt::WA_DeleteOnClose);
+    }
+    showDialog(m_configDialog.data(), QStringLiteral("configuration"));
 }

@@ -100,6 +100,8 @@ function addTrayIcon(window) {
     trayItem.requestShowHide.connect(toggleShowHide);
     trayItem.requestClose.connect(closeWindow);
     trayItem.requestUnpin.connect(unpinIcon);
+    trayItem.requestAbout.connect(() => scriptConfig.showAbout());
+    trayItem.requestConfigure.connect(() => scriptConfig.configure());
     trayIcons[windowId] = trayItem;
     enforceTrayManagedState(window);
 }
@@ -114,6 +116,7 @@ function removeTrayIcon(window) {
 }
 
 function restoreManagedWindows() {
+    pendingActivation = null;
     const managedWindowIds = Object.keys(trayIcons);
 
     Workspace.windows.forEach(window => {
@@ -185,7 +188,7 @@ function toggleShowHide(windowId) {
     if (!window) return;
 
     window.minimized = !window.minimized;
-    if (!window.minimized) Workspace.activeWindow = window;
+    if (!window.minimized) activateWindowInPlace(window);
 
     if (window.minimized) {
         setSkip(true, window);
@@ -194,7 +197,42 @@ function toggleShowHide(windowId) {
     }
 }
 
+function activateWindowInPlace(window) {
+    pendingActivation = window.internalId;
+    const activities = window.activities;
+    if (activities.length && activities.indexOf(Workspace.currentActivity) === -1) {
+        // Activity changes are asynchronous; focus only after KWin reports the new activity.
+        Workspace.currentActivity = activities[0];
+        return;
+    }
+    finishWindowActivation();
+}
+
+function finishWindowActivation() {
+    if (pendingActivation === null) return;
+    const window = getWindow(pendingActivation);
+    if (!window || window.minimized || isProtectedWindow(window)) {
+        pendingActivation = null;
+        return;
+    }
+    if (window.activities.length && window.activities.indexOf(Workspace.currentActivity) === -1) return;
+    pendingActivation = null;
+
+    const desktops = window.desktops;
+    const perScreen = window.output && typeof Workspace.currentDesktopForScreen === "function" &&
+        typeof Workspace.setCurrentDesktopForScreen === "function";
+    const current = perScreen ? Workspace.currentDesktopForScreen(window.output) : Workspace.currentDesktop;
+    if (desktops.length && desktops.indexOf(current) === -1) {
+        // Switch the view first so KWin's activation policy cannot bring the window here.
+        const desktop = desktops[desktops.length - 1];
+        if (perScreen) Workspace.setCurrentDesktopForScreen(desktop, window.output);
+        else Workspace.currentDesktop = desktop;
+    }
+    Workspace.activeWindow = window;
+}
+
 function onMinimizeChanged(window) {
+    if (window.minimized && pendingActivation === window.internalId) pendingActivation = null;
     if (!(window.internalId in trayIcons)) {
         return;
     }
@@ -220,7 +258,7 @@ function unpinIcon(windowId) {
     setMinimize(false, window);
     setSkip(false, window);
     removeTrayIcon(window);
-    Workspace.activeWindow = window;
+    activateWindowInPlace(window);
 }
 
 function updateToolTip(window) {

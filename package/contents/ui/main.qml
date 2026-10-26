@@ -13,6 +13,7 @@ Item {
     property var automaticMatches: new Object()
     property var trackedWindows: new Object()
     property var pendingWindows: new Object()
+    property var pendingActivation: null
     readonly property Component trayIconComponent: TrayIcon {
         countUseDot: root.countUseDot
         countDisplayLimit: root.countDisplayLimit
@@ -57,9 +58,11 @@ Item {
     }
 
     Component.onCompleted: {
+        Workspace.currentActivityChanged.connect(() => Utils.finishWindowActivation());
         Workspace.windowAdded.connect(window => Utils.setup(window));
         Workspace.windowAdded.connect(window => Utils.scheduleWindow(window));
         Workspace.windowRemoved.connect(window => {
+            if (pendingActivation === window.internalId) pendingActivation = null;
             Utils.removeTrayIcon(window);
             delete automaticMatches[window.internalId];
             delete trackedWindows[window.internalId];

@@ -3,8 +3,11 @@
 #include <KConfig>
 #include <KDirWatch>
 #include <QObject>
+#include <QPointer>
 #include <QTimer>
 #include <QVariantMap>
+
+class QDialog;
 
 class ScriptConfig : public QObject {
     Q_OBJECT
@@ -15,6 +18,8 @@ class ScriptConfig : public QObject {
     explicit ScriptConfig(QObject *parent = nullptr);
     ~ScriptConfig() override;
     QVariantMap values() const { return m_values; }
+    Q_INVOKABLE void showAbout();
+    Q_INVOKABLE void configure();
     Q_INVOKABLE bool isProtected(const QVariantMap &window) const;
     Q_INVOKABLE QStringList matchingRules(const QVariantMap &window) const;
     Q_INVOKABLE void setWindows(const QVariantList &windows) { m_windows = windows; }
@@ -28,7 +33,10 @@ class ScriptConfig : public QObject {
 
   private:
     void reload();
+    void showDialog(QDialog *dialog, const QString &role);
     KConfig m_config;
+    QPointer<QDialog> m_aboutDialog;
+    QPointer<QDialog> m_configDialog;
     KDirWatch m_watch;
     QTimer m_reloadTimer;
     QVariantMap m_values;

@@ -351,17 +351,37 @@ void TrayIcon::initializeTrayIcon() {
 
     qDebug() << "New Tray Icon" << m_xdgName;
     trayIcon = new KStatusNotifierItem(m_xdgName.isEmpty() ? m_windowId.toString() : m_xdgName, this);
+    // Own Quit to provide a tooltip and keep it scoped to this window.
+    trayIcon->setStandardActionsEnabled(false);
     m_menu = new QMenu();
+    m_menu->setToolTipsVisible(true);
 
     QAction *showAction = new QAction("Show/Hide", m_menu);
     connect(showAction, &QAction::triggered, this, [this]() { emit requestShowHide(m_windowId); });
+    showAction->setToolTip(tr("Show or hide this window on its assigned activity and virtual desktop."));
     showAction->setIcon(QIcon::fromTheme(QStringLiteral("view-visible-symbolic")));
     m_menu->addAction(showAction);
 
     QAction *unpinAction = new QAction("Unpin", m_menu);
     connect(unpinAction, &QAction::triggered, this, [this]() { emit requestUnpin(m_windowId); });
+    unpinAction->setToolTip(tr("Show this window and remove its tray icon."));
     unpinAction->setIcon(QIcon::fromTheme(QStringLiteral("window-unpin-symbolic")));
     m_menu->addAction(unpinAction);
+
+    m_menu->addSeparator();
+    auto aboutAction = m_menu->addAction(QIcon::fromTheme(QStringLiteral("help-about")), tr("About"));
+    aboutAction->setIconVisibleInMenu(true);
+    aboutAction->setToolTip(tr("About Minimize2Tray: version, authors, license and project website."));
+    connect(aboutAction, &QAction::triggered, this, &TrayIcon::requestAbout);
+    auto configureAction = m_menu->addAction(QIcon::fromTheme(QStringLiteral("configure")), tr("Configure…"));
+    configureAction->setIconVisibleInMenu(true);
+    configureAction->setToolTip(tr("Configure Minimize2Tray settings and window rules for all applications."));
+    connect(configureAction, &QAction::triggered, this, &TrayIcon::requestConfigure);
+
+    m_menu->addSeparator();
+    auto quitAction = m_menu->addAction(QIcon::fromTheme(QStringLiteral("application-exit")), tr("Quit"));
+    quitAction->setToolTip(tr("Close this window. Other windows of the application may remain open."));
+    connect(quitAction, &QAction::triggered, this, [this]() { emit requestClose(m_windowId); });
 
     connect(trayIcon, &KStatusNotifierItem::quitRequested, this, [this]() {
         emit requestClose(m_windowId);

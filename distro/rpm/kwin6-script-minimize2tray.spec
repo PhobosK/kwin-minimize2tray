@@ -8,7 +8,7 @@
 %bcond_with upstream
 
 # Release version shared by the RPM and About metadata.
-%{!?upstream_version:%global upstream_version 0.1.0}
+%{!?upstream_version:%global upstream_version 0.4.0}
 %{!?tag:%global tag v%{upstream_version}}
 
 # Set commit to a full SHA to use a fixed revision instead of the release tag.
@@ -50,6 +50,7 @@ BuildRequires:  cmake(Qt6Widgets) >= 6.6.0
 # Required by the original build system.
 BuildRequires:  cmake(KF6Package) >= 6.0.0
 BuildRequires:  cmake(KF6KCMUtils) >= 6.0.0
+BuildRequires:  cmake(KF6XmlGui) >= 6.0.0
 BuildRequires:  cmake(KF6Service) >= 6.0.0
 BuildRequires:  cmake(KF6StatusNotifierItem) >= 6.0.0
 Requires:       kwin6 >= 6.0.0

@@ -1,4 +1,8 @@
-# KWin Minimize2Tray
+# KWin Minimize2Tray — PhobosK fork
+
+**This is the [PhobosK fork](https://github.com/PhobosK/kwin-minimize2tray) of [KWin Minimize2Tray](https://github.com/luisbocanegra/kwin-minimize2tray), originally created by [Luis Bocanegra](https://github.com/luisbocanegra).**
+
+This fork builds on the original work with reliability fixes, easier configuration and selected KDocker-like features, while preserving Wayland support and existing X11 compatibility.
 
 **This is work in progress, don't expect feature parity with other implementations right away**
 
@@ -31,6 +35,15 @@ Hide windows to the system tray, similar to [KDocker](https://github.com/user-no
 
   - *[Demands attention](https://invent.kde.org/plasma/kwin/-/blob/fc98b4bcbd80ba025994c2d31244d984a253ec66/src/window.h#L429)* from KWin will also set *[NeedsAttention](https://api.kde.org/plasma-types.html#ItemStatus-enum)* status of icon and works per window.
 
+### Fork additions and fixes
+
+- Searchable window rules with individual enable, edit and delete controls, KWin window detection, matching previews and JSON export. Existing class settings migrate automatically.
+- Matching by application, class, instance, role, title and window type, with protection for child windows, modal dialogs and the script's own configuration windows.
+- Configuration changes take effect after Apply or OK. Removing the last matching rule restores affected windows and removes their tray icons.
+- Desktop-file icon overrides and improvements to the existing Unity counters, dots, progress and urgency handling.
+- About and full configuration access from each tray menu, plus restoration that preserves window activity/desktop memberships, monitor and geometry.
+- Consistent build versioning, CMake script archives and an openSUSE RPM spec supporting this fork or upstream sources.
+
 ## Installation
 
 Proper distribution packages will be available eventually, for now you can install it manually.
@@ -38,7 +51,7 @@ Proper distribution packages will be available eventually, for now you can insta
 **You will need to install any required dependencies**, see [#9 Note build dependencies](https://github.com/luisbocanegra/kwin-minimize2tray/issues/9)
 
 ```sh
-git clone https://github.com/luisbocanegra/kwin-minimize2tray.git
+git clone https://github.com/PhobosK/kwin-minimize2tray.git
 cd kwin-minimize2tray
 ./install.sh
 ```
@@ -83,15 +96,19 @@ Edits remain pending until **Apply** or **OK** on the main configuration page. N
 
 Previous comma-separated class settings migrate automatically on first use. The original list is retained as `legacyClassBackup` in the same `kwinrc` script group; imported rules preserve class-or-instance matching and do not guess missing roles. An empty new rule list remains empty. Invalid or unsupported JSON is reported rather than overwritten; the running script keeps its last valid rules. Concurrent edits are detected before saving.
 
-Dialog sizes, page selection, search and selected rule are remembered in the existing script configuration group. Window position restoration is supported on X11; Wayland placement remains controlled by KWin. The native configuration module is built and installed alongside the tray plugin and requires KF6 KCMUtils development files. After installing updated native plugins, start a new Plasma session once before live checks.
+Each managed window's tray menu has a separate Minimize2Tray group: **About** shows the installed Minimize2Tray metadata, and **Configure…** opens the full configuration page for all rules. These dialogs remain available if that window is unpinned or its rule is removed. All tray actions include explanatory tooltips for tray hosts that support them; Plasma's D-Bus menu importer currently does not forward action tooltips.
+
+Hiding leaves the window's activity and desktop memberships, monitor and geometry unchanged. **Show** and **Unpin** switch to an assigned activity and desktop before focusing the window, including when KWin is configured to bring activated windows to the current desktop. Windows assigned to all activities or desktops keep those assignments; explicit moves made while hidden are respected.
+
+Dialog sizes, page selection, search and selected rule are remembered in the existing script configuration group. Window position restoration is supported on X11; Wayland placement remains controlled by KWin. The native configuration module is built and installed alongside the tray plugin and requires KF6 KCMUtils and KXmlGui development files. After installing updated native plugins, start a new Plasma session once before live checks.
 
 ## Acknowledgements
 
 [Unity LauncherAPI](https://wiki.ubuntu.com/Unity/LauncherAPI) implementation is a simplified version of [KDE/plasma-desktop/applets/taskmanager/plugin/smartlaunchers](https://github.com/KDE/plasma-desktop/tree/e3ba92b113d8a4e2d47a589835e9d867059dc2b9/applets/taskmanager/plugin/smartlaunchers)
 
-## Support the development
+## Support the original author
 
-If this project has been useful to you, consider sponsoring or donating so I can dedicate more time to maintain and improve this and [my other open source work](https://github.com/luisbocanegra?tab=repositories&q=&type=source&language=&sort=stargazers)
+The links below support **Luis Bocanegra**, the original author of Minimize2Tray. If this project has been useful to you, consider sponsoring or donating to support his work on this project and [his other open source work](https://github.com/luisbocanegra?tab=repositories&q=&type=source&language=&sort=stargazers)
 
 [![GitHub Sponsors](https://img.shields.io/badge/GitHub%20Sponsors-%2329313C?logo=githubsponsors&style=for-the-badge)](https://github.com/sponsors/luisbocanegra)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-supporter?logo=ko-fi&logoColor=%23ffffff&color=%23467BEB&style=for-the-badge)](https://ko-fi.com/luisbocanegra)
