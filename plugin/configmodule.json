@@ -4,7 +4,9 @@
         "Description": "Configure window rules and tray icons",
         "Icon": "view-visible",
         "License": "GPL",
-        "Authors": [{"Name": "Luis Bocanegra", "Email": "luisbocanegra17b@gmail.com"}],
+        "Website": "https://github.com/PhobosK/kwin-minimize2tray",
+        "BugReportUrl": "https://github.com/PhobosK/kwin-minimize2tray/issues",
+        "Authors": [{"Name": "Luis Bocanegra", "Email": "luisbocanegra17b@gmail.com", "Website": "https://github.com/luisbocanegra"}],
         "OtherContributors": [{"Name": "PhobosK", "Task": "Fork development and improvements"}]
     }
 }

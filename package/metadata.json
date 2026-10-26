@@ -4,7 +4,8 @@
         "Authors": [
             {
                 "Email": "luisbocanegra17b@gmail.com",
-                "Name": "Luis Bocanegra"
+                "Name": "Luis Bocanegra",
+                "Website": "https://github.com/luisbocanegra"
             }
         ],
         "OtherContributors": [
@@ -13,7 +14,7 @@
                 "Task": "Fork development and improvements"
             }
         ],
-        "BugReportUrl": "https://github.com/luisbocanegra/kwin-minimize2tray/issues",
+        "BugReportUrl": "https://github.com/PhobosK/kwin-minimize2tray/issues",
         "Description": "Minimize active window to the System tray and skip Taskbar, Switcher and Pager",
         "EnabledByDefault": false,
         "Id": "com.github.luisbocanegra.minimize2tray",
@@ -21,7 +22,7 @@
         "Name": "Minimize to Tray",
         "Icon": "view-visible-symbolic",
         "Version": "0.1.0",
-        "Website": "https://github.com/luisbocanegra/kwin-minimize2tray"
+        "Website": "https://github.com/PhobosK/kwin-minimize2tray"
     },
     "X-Plasma-API": "declarativescript",
     "X-Plasma-API-Minimum-Version": "6.0",

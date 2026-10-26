@@ -1,7 +1,8 @@
 #include "scriptconfig.h"
 #include "rules.h"
 
-#include <KAboutPluginDialog>
+#include <KAboutApplicationDialog>
+#include <KAboutData>
 #include <KCMultiDialog>
 #include <KPluginMetaData>
 #include <QDBusConnection>
@@ -86,7 +87,24 @@ void ScriptConfig::showAbout() {
                                        QStringLiteral("/metadata.json"));
         const auto metadata = KPluginMetaData::fromJsonFile(path);
         if (metadata.isValid() && metadata.pluginId() == QLatin1String(Minimize2Tray::ScriptId)) {
-            m_aboutDialog = new KAboutPluginDialog(metadata);
+            KAboutData aboutData(
+                metadata.pluginId(), metadata.name(), metadata.version(), metadata.description(),
+                KAboutLicense::byKeyword(metadata.license()).key(), metadata.copyrightText(),
+                tr("PhobosK fork, based on <a href=\"https://github.com/luisbocanegra/kwin-minimize2tray\">"
+                   "KWin Minimize2Tray by Luis Bocanegra</a>."),
+                metadata.website(), metadata.bugReportUrl());
+            aboutData.setProgramLogo(QIcon::fromTheme(metadata.iconName()));
+            for (const auto &author : metadata.authors())
+                aboutData.addAuthor(author);
+            for (const auto &contributor : metadata.otherContributors())
+                aboutData.addCredit(contributor);
+            QStringList translatorNames, translatorEmails;
+            for (const auto &translator : metadata.translators()) {
+                translatorNames.append(translator.name());
+                translatorEmails.append(translator.emailAddress());
+            }
+            aboutData.setTranslator(translatorNames.join(QLatin1Char(',')), translatorEmails.join(QLatin1Char(',')));
+            m_aboutDialog = new KAboutApplicationDialog(aboutData, KAboutApplicationDialog::HideLibraries);
         } else {
             m_aboutDialog =
                 new QMessageBox(QMessageBox::Warning, tr("Minimize to Tray"),
