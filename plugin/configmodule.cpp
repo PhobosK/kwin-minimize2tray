@@ -378,14 +378,35 @@ class RuleDialog : public QDialog {
         form->addRow(tr("Description:"), m_description);
         form->addRow(QString(), m_enabled);
         outer->addLayout(form);
-        m_pinWithoutHiding = new QCheckBox(tr("Pin without initially hiding"));
-        m_pinWithoutHiding->setObjectName(QStringLiteral("pinWithoutHiding"));
-        m_pinWithoutHiding->setChecked(
-            !rule.value(QStringLiteral("behavior")).toMap().value(QStringLiteral("startInTray")).toBool());
-        outer->addWidget(m_pinWithoutHiding);
-        outer->addWidget(plainLabel(tr("Create a tray icon when the rule matches, leaving the window's current "
-                                       "visibility unchanged. Otherwise, initially hide it in the tray. "
-                                       "If rules overlap, any matching rule that initially hides takes precedence.")));
+        const auto behavior = rule.value(QStringLiteral("behavior")).toMap();
+        auto actions = new QFormLayout;
+        m_startup = new QComboBox;
+        m_startup->setObjectName(QStringLiteral("startupAction"));
+        m_startup->addItem(tr("No startup action"), QStringLiteral("none"));
+        m_startup->addItem(tr("Pin without initially hiding"), QStringLiteral("pin"));
+        m_startup->addItem(tr("Start in tray"), QStringLiteral("hide"));
+        m_startup->setCurrentIndex(behavior.value(QStringLiteral("startInTray")).toBool() ? 2
+                                  : behavior.value(QStringLiteral("autoPin")).toBool() ? 1 : 0);
+        actions->addRow(tr("Startup:"), m_startup);
+        m_minimize = new QComboBox;
+        m_minimize->setObjectName(QStringLiteral("minimizeToTray"));
+        m_minimize->addItem(tr("Use global Hide on minimize setting"), QStringLiteral("inherit"));
+        m_minimize->addItem(tr("On"), QStringLiteral("enabled"));
+        m_minimize->addItem(tr("Off"), QStringLiteral("disabled"));
+        m_minimize->setCurrentIndex(m_minimize->findData(behavior.value(QStringLiteral("minimizeToTray"))));
+        actions->addRow(tr("Minimize to tray:"), m_minimize);
+        m_close = new QCheckBox(tr("Close to tray through the optional shortcut"));
+        m_close->setObjectName(QStringLiteral("closeToTray"));
+        m_close->setChecked(behavior.value(QStringLiteral("closeToTray")).toBool());
+        actions->addRow(QString(), m_close);
+        outer->addLayout(actions);
+        outer->addWidget(plainLabel(tr("Minimize and close actions do not require a startup action. Start in tray "
+                                       "hides on first match, including existing windows when applying rules. "
+                                       "Overlapping rules combine their enabled actions; explicit Minimize Off "
+                                       "overrides the global setting unless another matching rule enables it.")));
+        outer->addWidget(plainLabel(tr("Close to tray requires assigning the separate ‘Close or hide window to tray’ "
+                                       "shortcut in System Settings. It has no default binding. Titlebar Close, "
+                                       "application Quit and the tray Quit action still close normally.")));
         auto detectRow = new QHBoxLayout;
         m_detect = makeButton(tr("Detect window properties…"), QStringLiteral("edit-find"));
         m_detect->setObjectName(QStringLiteral("detectWindow"));
@@ -513,7 +534,9 @@ class RuleDialog : public QDialog {
         connect(m_type, &QComboBox::currentIndexChanged, this, &RuleDialog::edited);
         connect(m_children, &QCheckBox::toggled, this, &RuleDialog::edited);
         connect(m_enabled, &QCheckBox::toggled, this, &RuleDialog::edited);
-        connect(m_pinWithoutHiding, &QCheckBox::toggled, this, &RuleDialog::edited);
+        connect(m_startup, &QComboBox::currentIndexChanged, this, &RuleDialog::edited);
+        connect(m_minimize, &QComboBox::currentIndexChanged, this, &RuleDialog::edited);
+        connect(m_close, &QCheckBox::toggled, this, &RuleDialog::edited);
         connect(m_title, &QLineEdit::textChanged, this, &RuleDialog::edited);
         connect(m_description, &QPlainTextEdit::textChanged, this, &RuleDialog::edited);
         QTimer::singleShot(0, this, &RuleDialog::refreshPreview);
@@ -525,7 +548,10 @@ class RuleDialog : public QDialog {
         result[QStringLiteral("description")] = m_description->toPlainText();
         result[QStringLiteral("enabled")] = m_enabled->isChecked();
         result[QStringLiteral("behavior")] =
-            QVariantMap{{QStringLiteral("startInTray"), !m_pinWithoutHiding->isChecked()}};
+            QVariantMap{{QStringLiteral("autoPin"), m_startup->currentData() == QLatin1String("pin")},
+                        {QStringLiteral("startInTray"), m_startup->currentData() == QLatin1String("hide")},
+                        {QStringLiteral("minimizeToTray"), m_minimize->currentData()},
+                        {QStringLiteral("closeToTray"), m_close->isChecked()}};
         QVariantMap match{{QStringLiteral("windowTypes"), m_type->currentData()},
                           {QStringLiteral("includeChildren"), !m_children->isChecked()}};
         for (auto it = m_conditions.begin(); it != m_conditions.end(); ++it) {
@@ -783,7 +809,9 @@ class RuleDialog : public QDialog {
     QLineEdit *m_title;
     QPlainTextEdit *m_description;
     QCheckBox *m_enabled;
-    QCheckBox *m_pinWithoutHiding;
+    QComboBox *m_startup;
+    QComboBox *m_minimize;
+    QCheckBox *m_close;
     QComboBox *m_type;
     QCheckBox *m_children;
     QMap<QString, Condition> m_conditions;
@@ -885,8 +913,8 @@ class Minimize2TrayConfig : public KCModule {
         m_hide = new QCheckBox(tr("Hide on minimize"));
         m_hide->setObjectName(QStringLiteral("hideOnMinimize"));
         trayLayout->addWidget(m_hide);
-        trayLayout->addWidget(plainLabel(tr("Hide already pinned windows when they are minimized. Otherwise, "
-                                            "ordinary minimization keeps them in the taskbar.")));
+        trayLayout->addWidget(plainLabel(tr("Default for rules using ‘Use global setting’ and for manually pinned windows "
+                                            "without a matching rule. Per-rule On or Off overrides this default.")));
         trayLayout->addStretch();
         m_tabs->addTab(trayPage, QIcon::fromTheme(QStringLiteral("preferences-desktop-notification")),
                        tr("Tray && badges"));
@@ -1038,14 +1066,16 @@ class Minimize2TrayConfig : public KCModule {
             }
         }
         const QString previousRules = current.value(QStringLiteral("rules")).toString();
-        if (!group.hasKey("rulesSchema1Backup") &&
-            QJsonDocument::fromJson(previousRules.toUtf8()).object().value(QStringLiteral("schemaVersion")) ==
-                QJsonValue(1)) {
-            if (group.isEntryImmutable("rulesSchema1Backup")) {
+        const auto previousSchema =
+            QJsonDocument::fromJson(previousRules.toUtf8()).object().value(QStringLiteral("schemaVersion"));
+        const QString backupKey = previousSchema == QJsonValue(1) ? QStringLiteral("rulesSchema1Backup")
+                                  : previousSchema == QJsonValue(2) ? QStringLiteral("rulesSchema2Backup") : QString();
+        if (!backupKey.isEmpty() && !group.hasKey(backupKey)) {
+            if (group.isEntryImmutable(backupKey)) {
                 saveError(tr("The rule migration backup is locked by the system administrator."));
                 return;
             }
-            group.writeEntry("rulesSchema1Backup", previousRules);
+            group.writeEntry(backupKey, previousRules);
         }
         group.writeEntry("rules", encodeRules(m_model->rules));
         group.writeEntry("countUseDot", m_dot->isChecked());

@@ -68,16 +68,30 @@ QStringList ScriptConfig::matchingRules(const QVariantMap &window) const {
 
 QVariantMap ScriptConfig::matchingBehavior(const QVariantMap &window) const {
     bool matched = false;
+    bool autoPin = false;
     bool startInTray = false;
+    bool closeToTray = false;
+    bool minimizeEnabled = false;
+    bool minimizeDisabled = false;
     for (const auto &value : m_values.value(QStringLiteral("rules")).toList()) {
         const auto rule = value.toMap();
-        if (Minimize2Tray::matchFailure(rule, window).isEmpty()) {
-            matched = true;
-            startInTray = startInTray || rule.value(QStringLiteral("behavior")).toMap()
-                                            .value(QStringLiteral("startInTray")).toBool();
-        }
+        if (!Minimize2Tray::matchFailure(rule, window).isEmpty())
+            continue;
+        matched = true;
+        const auto behavior = rule.value(QStringLiteral("behavior")).toMap();
+        autoPin = autoPin || behavior.value(QStringLiteral("autoPin")).toBool();
+        startInTray = startInTray || behavior.value(QStringLiteral("startInTray")).toBool();
+        closeToTray = closeToTray || behavior.value(QStringLiteral("closeToTray")).toBool();
+        const QString minimize = behavior.value(QStringLiteral("minimizeToTray")).toString();
+        minimizeEnabled = minimizeEnabled || minimize == QLatin1String("enabled");
+        minimizeDisabled = minimizeDisabled || minimize == QLatin1String("disabled");
     }
-    return {{QStringLiteral("matched"), matched}, {QStringLiteral("startInTray"), startInTray}};
+    // Explicit enable wins across matching rules; explicit disable overrides inherited defaults.
+    const bool minimizeToTray = minimizeEnabled ||
+        (!minimizeDisabled && m_values.value(QStringLiteral("hideOnMinimize")).toBool());
+    return {{QStringLiteral("matched"), matched}, {QStringLiteral("autoPin"), autoPin},
+            {QStringLiteral("startInTray"), startInTray}, {QStringLiteral("minimizeToTray"), minimizeToTray},
+            {QStringLiteral("closeToTray"), closeToTray}};
 }
 
 QVariantList ScriptConfig::windows() {

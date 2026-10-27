@@ -9,6 +9,8 @@ Item {
     property bool countUseDot: false
     property int countDisplayLimit: 99
     property bool hideOnMinimize: false
+    property bool shuttingDown: false
+    property var workspaceConnections: []
     property var trayIcons: new Object()
     property var automaticMatches: new Object()
     property var automaticPins: new Object()
@@ -59,20 +61,20 @@ Item {
         }
     }
 
+    ShortcutHandler {
+        name: "Close or hide window to tray"
+        text: "Close or hide window to tray (according to window rules)"
+        sequence: ""
+        onActivated: Utils.closeOrHideWindow(Workspace.activeWindow)
+    }
+
     Component.onCompleted: {
-        Workspace.currentActivityChanged.connect(() => Utils.finishWindowActivation());
-        Workspace.windowAdded.connect(window => Utils.setup(window));
-        Workspace.windowAdded.connect(window => Utils.scheduleWindow(window));
-        Workspace.windowRemoved.connect(window => {
-            if (pendingActivation === window.internalId) pendingActivation = null;
-            Utils.removeTrayIcon(window);
-            delete automaticMatches[window.internalId];
-            delete automaticPins[window.internalId];
-            delete automaticDecisions[window.internalId];
-            delete hiddenWindows[window.internalId];
-            delete trackedWindows[window.internalId];
-            delete pendingWindows[window.internalId];
+        Utils.connectSignal(workspaceConnections, Workspace.currentActivityChanged, () => Utils.finishWindowActivation());
+        Utils.connectSignal(workspaceConnections, Workspace.windowAdded, window => {
+            Utils.setup(window);
+            Utils.scheduleWindow(window);
         });
+        Utils.connectSignal(workspaceConnections, Workspace.windowRemoved, window => Utils.forgetWindow(window));
         Workspace.windows.forEach(window => Utils.setup(window));
         reloadConfig();
     }
