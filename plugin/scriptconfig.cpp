@@ -66,6 +66,20 @@ QStringList ScriptConfig::matchingRules(const QVariantMap &window) const {
     return matches;
 }
 
+QVariantMap ScriptConfig::matchingBehavior(const QVariantMap &window) const {
+    bool matched = false;
+    bool startInTray = false;
+    for (const auto &value : m_values.value(QStringLiteral("rules")).toList()) {
+        const auto rule = value.toMap();
+        if (Minimize2Tray::matchFailure(rule, window).isEmpty()) {
+            matched = true;
+            startInTray = startInTray || rule.value(QStringLiteral("behavior")).toMap()
+                                            .value(QStringLiteral("startInTray")).toBool();
+        }
+    }
+    return {{QStringLiteral("matched"), matched}, {QStringLiteral("startInTray"), startInTray}};
+}
+
 QVariantList ScriptConfig::windows() {
     Q_EMIT windowsRequested();
     return m_windows;

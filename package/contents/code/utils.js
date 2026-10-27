@@ -84,11 +84,16 @@ function formattedWindowInfo(w) {
     return `${w.caption || w.resourceName || w.resourceClass}\n${desktops} @ ${w.output.name}`;
 }
 
-function addTrayIcon(window) {
-    if (isProtectedWindow(window)) return;
+function addTrayIcon(window, automatic = false) {
+    if (isProtectedWindow(window)) return false;
+    if (!automatic) {
+        // An explicit shortcut pin takes ownership independently of the rules.
+        delete automaticPins[window.internalId];
+        if (window.internalId in hiddenWindows) hiddenWindows[window.internalId].automatic = false;
+    }
     const windowId = window.internalId;
     if (windowId in trayIcons) {
-        return;
+        return true;
     }
     const trayItem = trayIconComponent.createObject(root, {
         "icon": window.icon,
@@ -97,13 +102,15 @@ function addTrayIcon(window) {
         "xdgName": window.desktopFileName,
         "demandsAttention": window.demandsAttention
     });
+    if (!trayItem) return false;
     trayItem.requestShowHide.connect(toggleShowHide);
     trayItem.requestClose.connect(closeWindow);
     trayItem.requestUnpin.connect(unpinIcon);
     trayItem.requestAbout.connect(() => scriptConfig.showAbout());
     trayItem.requestConfigure.connect(() => scriptConfig.configure());
     trayIcons[windowId] = trayItem;
-    enforceTrayManagedState(window);
+    if (automatic) automaticPins[windowId] = true;
+    return true;
 }
 
 function removeTrayIcon(window) {
@@ -111,37 +118,51 @@ function removeTrayIcon(window) {
     if (!(windowId in trayIcons)) {
         return;
     }
-    trayIcons[windowId].destroy();
+    const trayItem = trayIcons[windowId];
     delete trayIcons[windowId];
+    delete automaticPins[windowId];
+    trayItem.destroy();
 }
 
 function restoreManagedWindows() {
     pendingActivation = null;
-    const managedWindowIds = Object.keys(trayIcons);
-
     Workspace.windows.forEach(window => {
-        const windowId = window.internalId;
-        if (!(windowId in trayIcons)) {
-            return;
-        }
-
-        /*
-         * Drop ownership before changing KWin state. The skip-state guard
-         * must not reapply the hidden state while the script is unloading.
-         */
-        delete trayIcons[windowId];
-        setSkip(false, window);
-        setMinimize(false, window);
+        // Drop tray ownership before restoring flags so the guard cannot rehide it.
+        delete trayIcons[window.internalId];
+        releaseHiddenWindow(window, true);
     });
+    trayIcons = new Object();
+    automaticPins = new Object();
+    hiddenWindows = new Object();
+    automaticDecisions = new Object();
+}
 
-    /*
-     * windowRemoved normally cleans stale entries. Clear any that remain
-     * defensively; their tray objects are children of root and are already
-     * being destroyed with it.
-     */
-    managedWindowIds.forEach(windowId => {
-        delete trayIcons[windowId];
-    });
+function hideWindow(window, automatic = false) {
+    const windowId = window.internalId;
+    if (!(windowId in trayIcons) || isProtectedWindow(window)) return;
+    if (!(windowId in hiddenWindows)) {
+        hiddenWindows[windowId] = {
+            automatic: automatic,
+            skipTaskbar: window.skipTaskbar,
+            skipPager: window.skipPager,
+            skipSwitcher: window.skipSwitcher
+        };
+    } else if (!automatic) {
+        hiddenWindows[windowId].automatic = false;
+    }
+    window.minimized = true;
+    enforceTrayManagedState(window);
+}
+
+function releaseHiddenWindow(window, restore) {
+    const windowId = window.internalId;
+    const hidden = hiddenWindows[windowId];
+    if (!hidden) return;
+    delete hiddenWindows[windowId];
+    window.skipTaskbar = hidden.skipTaskbar;
+    window.skipPager = hidden.skipPager;
+    window.skipSwitcher = hidden.skipSwitcher;
+    if (restore) window.minimized = false;
 }
 
 function setMinimize(minimize, window) {
@@ -155,7 +176,7 @@ function setSkip(skip, window) {
 }
 
 function enforceTrayManagedState(window) {
-    if (!(window.internalId in trayIcons) || !window.minimized) {
+    if (!(window.internalId in trayIcons) || !(window.internalId in hiddenWindows) || !window.minimized) {
         return;
     }
 
@@ -187,13 +208,13 @@ function toggleShowHide(windowId) {
     const window = getWindow(windowId);
     if (!window) return;
 
-    window.minimized = !window.minimized;
-    if (!window.minimized) activateWindowInPlace(window);
-
     if (window.minimized) {
-        setSkip(true, window);
+        automaticDecisions[windowId] = "shown";
+        releaseHiddenWindow(window, true);
+        window.minimized = false;
+        activateWindowInPlace(window);
     } else {
-        setSkip(false, window);
+        hideWindow(window);
     }
 }
 
@@ -232,12 +253,18 @@ function finishWindowActivation() {
 }
 
 function onMinimizeChanged(window) {
-    if (window.minimized && pendingActivation === window.internalId) pendingActivation = null;
-    if (!(window.internalId in trayIcons)) {
-        return;
-    }
-    if (window.minimized && hideOnMinimize) {
-        setSkip(true, window);
+    const windowId = window.internalId;
+    if (window.minimized && pendingActivation === windowId) pendingActivation = null;
+    if (!window.minimized) {
+        if (windowId in hiddenWindows) {
+            // External restores have no reliable user/application attribution.
+            automaticDecisions[windowId] = "shown";
+            releaseHiddenWindow(window, false);
+        }
+    } else if (windowId in hiddenWindows) {
+        enforceTrayManagedState(window);
+    } else if (windowId in trayIcons && hideOnMinimize) {
+        hideWindow(window);
     }
 }
 
@@ -249,15 +276,17 @@ function closeWindow(windowId) {
     const window = getWindow(windowId);
     if (!window) return;
 
+    if (pendingActivation === windowId) pendingActivation = null;
     window.closeWindow();
 }
 
 function unpinIcon(windowId) {
     const window = getWindow(windowId);
     if (!window) return;
-    setMinimize(false, window);
-    setSkip(false, window);
+    automaticDecisions[windowId] = "unpinned";
     removeTrayIcon(window);
+    releaseHiddenWindow(window, true);
+    window.minimized = false;
     activateWindowInPlace(window);
 }
 
@@ -311,17 +340,34 @@ function reconcileWindows() {
     Workspace.windows.forEach(window => {
         if (!(window.internalId in pending)) return;
         const windowId = window.internalId;
-        const wasMatched = automaticMatches[windowId] === true;
-        const isMatched = scriptConfig.matchingRules(windowInfo(window)).length > 0;
-        automaticMatches[windowId] = isMatched;
-        if ((wasMatched && !isMatched || isProtectedWindow(window)) && windowId in trayIcons) {
+        const previous = automaticMatches[windowId] || {matched: false, startInTray: false};
+        const behavior = scriptConfig.matchingBehavior(windowInfo(window));
+        automaticMatches[windowId] = behavior;
+        if (isProtectedWindow(window)) {
             removeTrayIcon(window);
-            setSkip(false, window);
-            setMinimize(false, window);
-        } else if (isMatched && !wasMatched) {
-            addTrayIcon(window);
-            setMinimize(true, window);
-            enforceTrayManagedState(window);
+            releaseHiddenWindow(window, true);
+            delete automaticDecisions[windowId];
+            return;
+        }
+        if (!behavior.matched) {
+            if (windowId in automaticPins) {
+                removeTrayIcon(window);
+                releaseHiddenWindow(window, true);
+            }
+            delete automaticDecisions[windowId];
+            return;
+        }
+        if (automaticDecisions[windowId] === "unpinned") return;
+        const needsIcon = !(windowId in trayIcons);
+        if (needsIcon && !addTrayIcon(window, true)) return;
+        // Matching never takes ownership of an independently pinned window.
+        if (!(windowId in automaticPins)) return;
+        if (!behavior.startInTray) {
+            const hidden = hiddenWindows[windowId];
+            if (hidden && hidden.automatic) releaseHiddenWindow(window, true);
+        } else if ((!previous.matched || !previous.startInTray || needsIcon) &&
+                   automaticDecisions[windowId] !== "shown") {
+            hideWindow(window, true);
         }
     });
 }

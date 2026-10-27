@@ -24,6 +24,8 @@
 #include <QFormLayout>
 #include <QGridLayout>
 #include <QHeaderView>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
@@ -376,6 +378,14 @@ class RuleDialog : public QDialog {
         form->addRow(tr("Description:"), m_description);
         form->addRow(QString(), m_enabled);
         outer->addLayout(form);
+        m_pinWithoutHiding = new QCheckBox(tr("Pin without initially hiding"));
+        m_pinWithoutHiding->setObjectName(QStringLiteral("pinWithoutHiding"));
+        m_pinWithoutHiding->setChecked(
+            !rule.value(QStringLiteral("behavior")).toMap().value(QStringLiteral("startInTray")).toBool());
+        outer->addWidget(m_pinWithoutHiding);
+        outer->addWidget(plainLabel(tr("Create a tray icon when the rule matches, leaving the window's current "
+                                       "visibility unchanged. Otherwise, initially hide it in the tray. "
+                                       "If rules overlap, any matching rule that initially hides takes precedence.")));
         auto detectRow = new QHBoxLayout;
         m_detect = makeButton(tr("Detect window properties…"), QStringLiteral("edit-find"));
         m_detect->setObjectName(QStringLiteral("detectWindow"));
@@ -394,7 +404,7 @@ class RuleDialog : public QDialog {
         detectRow->addWidget(m_delay);
         detectRow->addStretch();
         outer->addLayout(detectRow);
-        outer->addWidget(plainLabel(tr("Select the main window of the app you want to hide.")));
+        outer->addWidget(plainLabel(tr("Select the main window of the app you want to pin.")));
         auto scope = new QHBoxLayout;
         scope->addWidget(plainLabel(tr("Window type:")));
         m_type = new QComboBox;
@@ -503,6 +513,7 @@ class RuleDialog : public QDialog {
         connect(m_type, &QComboBox::currentIndexChanged, this, &RuleDialog::edited);
         connect(m_children, &QCheckBox::toggled, this, &RuleDialog::edited);
         connect(m_enabled, &QCheckBox::toggled, this, &RuleDialog::edited);
+        connect(m_pinWithoutHiding, &QCheckBox::toggled, this, &RuleDialog::edited);
         connect(m_title, &QLineEdit::textChanged, this, &RuleDialog::edited);
         connect(m_description, &QPlainTextEdit::textChanged, this, &RuleDialog::edited);
         QTimer::singleShot(0, this, &RuleDialog::refreshPreview);
@@ -513,6 +524,8 @@ class RuleDialog : public QDialog {
         result[QStringLiteral("title")] = m_title->text().trimmed();
         result[QStringLiteral("description")] = m_description->toPlainText();
         result[QStringLiteral("enabled")] = m_enabled->isChecked();
+        result[QStringLiteral("behavior")] =
+            QVariantMap{{QStringLiteral("startInTray"), !m_pinWithoutHiding->isChecked()}};
         QVariantMap match{{QStringLiteral("windowTypes"), m_type->currentData()},
                           {QStringLiteral("includeChildren"), !m_children->isChecked()}};
         for (auto it = m_conditions.begin(); it != m_conditions.end(); ++it) {
@@ -770,6 +783,7 @@ class RuleDialog : public QDialog {
     QLineEdit *m_title;
     QPlainTextEdit *m_description;
     QCheckBox *m_enabled;
+    QCheckBox *m_pinWithoutHiding;
     QComboBox *m_type;
     QCheckBox *m_children;
     QMap<QString, Condition> m_conditions;
@@ -809,7 +823,7 @@ class Minimize2TrayConfig : public KCModule {
         auto rulesLayout = new QVBoxLayout(rulesPage);
         rulesLayout->setContentsMargins(16, 16, 16, 16);
         rulesLayout->setSpacing(12);
-        rulesLayout->addWidget(sectionLabel(tr("Windows to hide in the tray")));
+        rulesLayout->addWidget(sectionLabel(tr("Windows to pin in the tray")));
         rulesLayout->addWidget(plainLabel(tr("Choose an app window once. Fine-tune which windows are included.")));
         m_search = new QLineEdit;
         m_search->setObjectName(QStringLiteral("ruleSearch"));
@@ -853,7 +867,8 @@ class Minimize2TrayConfig : public KCModule {
         m_undo->hide();
         rulesLayout->addWidget(m_undo);
         rulesLayout->addWidget(
-            plainLabel(tr("Disabling or deleting a rule restores windows that no longer match another enabled rule.")));
+            plainLabel(tr("Disabling or deleting a rule removes automatic pins when no other enabled rule matches, "
+                          "restoring windows hidden in the tray.")));
         m_tabs->addTab(rulesPage, QIcon::fromTheme(QStringLiteral("preferences-system-windows")), tr("Window rules"));
         auto trayPage = new QWidget;
         auto trayLayout = new QVBoxLayout(trayPage);
@@ -870,6 +885,8 @@ class Minimize2TrayConfig : public KCModule {
         m_hide = new QCheckBox(tr("Hide on minimize"));
         m_hide->setObjectName(QStringLiteral("hideOnMinimize"));
         trayLayout->addWidget(m_hide);
+        trayLayout->addWidget(plainLabel(tr("Hide already pinned windows when they are minimized. Otherwise, "
+                                            "ordinary minimization keeps them in the taskbar.")));
         trayLayout->addStretch();
         m_tabs->addTab(trayPage, QIcon::fromTheme(QStringLiteral("preferences-desktop-notification")),
                        tr("Tray && badges"));
@@ -1019,6 +1036,16 @@ class Minimize2TrayConfig : public KCModule {
                 saveError(tr("A setting is locked by the system administrator."));
                 return;
             }
+        }
+        const QString previousRules = current.value(QStringLiteral("rules")).toString();
+        if (!group.hasKey("rulesSchema1Backup") &&
+            QJsonDocument::fromJson(previousRules.toUtf8()).object().value(QStringLiteral("schemaVersion")) ==
+                QJsonValue(1)) {
+            if (group.isEntryImmutable("rulesSchema1Backup")) {
+                saveError(tr("The rule migration backup is locked by the system administrator."));
+                return;
+            }
+            group.writeEntry("rulesSchema1Backup", previousRules);
         }
         group.writeEntry("rules", encodeRules(m_model->rules));
         group.writeEntry("countUseDot", m_dot->isChecked());

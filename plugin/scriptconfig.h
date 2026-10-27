@@ -22,6 +22,7 @@ class ScriptConfig : public QObject {
     Q_INVOKABLE void configure();
     Q_INVOKABLE bool isProtected(const QVariantMap &window) const;
     Q_INVOKABLE QStringList matchingRules(const QVariantMap &window) const;
+    Q_INVOKABLE QVariantMap matchingBehavior(const QVariantMap &window) const;
     Q_INVOKABLE void setWindows(const QVariantList &windows) { m_windows = windows; }
 
   public slots:

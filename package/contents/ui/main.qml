@@ -11,6 +11,9 @@ Item {
     property bool hideOnMinimize: false
     property var trayIcons: new Object()
     property var automaticMatches: new Object()
+    property var automaticPins: new Object()
+    property var automaticDecisions: new Object()
+    property var hiddenWindows: new Object()
     property var trackedWindows: new Object()
     property var pendingWindows: new Object()
     property var pendingActivation: null
@@ -52,8 +55,7 @@ Item {
             }
             if (!Utils.isValidWindow(window))
                 return;
-            Utils.toggleShowHide(window.internalId);
-            Utils.addTrayIcon(window);
+            if (Utils.addTrayIcon(window)) Utils.toggleShowHide(window.internalId);
         }
     }
 
@@ -65,6 +67,9 @@ Item {
             if (pendingActivation === window.internalId) pendingActivation = null;
             Utils.removeTrayIcon(window);
             delete automaticMatches[window.internalId];
+            delete automaticPins[window.internalId];
+            delete automaticDecisions[window.internalId];
+            delete hiddenWindows[window.internalId];
             delete trackedWindows[window.internalId];
             delete pendingWindows[window.internalId];
         });

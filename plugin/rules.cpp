@@ -61,12 +61,13 @@ QVariantMap newRule() {
         {QStringLiteral("title"), text("New rule")},
         {QStringLiteral("description"), QString()},
         {QStringLiteral("enabled"), true},
+        {QStringLiteral("behavior"), QVariantMap{{QStringLiteral("startInTray"), true}}},
         {QStringLiteral("match"), QVariantMap{{QStringLiteral("windowTypes"), QStringList{QStringLiteral("normal")}},
                                               {QStringLiteral("includeChildren"), false}}}};
 }
 
 QString encodeRules(const QVariantList &rules, bool indented) {
-    return QString::fromUtf8(QJsonDocument(QJsonObject{{QStringLiteral("schemaVersion"), 1},
+    return QString::fromUtf8(QJsonDocument(QJsonObject{{QStringLiteral("schemaVersion"), 2},
                                                        {QStringLiteral("rules"), QJsonArray::fromVariantList(rules)}})
                                  .toJson(indented ? QJsonDocument::Indented : QJsonDocument::Compact));
 }
@@ -103,8 +104,9 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
         return invalid(text("The rules are not valid JSON: ") + parseError.errorString());
     }
     const auto root = doc.object();
+    const auto schema = root.value(QStringLiteral("schemaVersion"));
     if (!onlyKeys(root, {QStringLiteral("schemaVersion"), QStringLiteral("rules")}) ||
-        root.value(QStringLiteral("schemaVersion")) != QJsonValue(1) ||
+        (schema != QJsonValue(1) && schema != QJsonValue(2)) ||
         !root.value(QStringLiteral("rules")).isArray()) {
         return invalid(text("Unsupported rule format or schema version."));
     }
@@ -120,13 +122,16 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
     auto matchKeys = conditions;
     matchKeys.insert(QStringLiteral("windowTypes"));
     matchKeys.insert(QStringLiteral("includeChildren"));
+    QSet<QString> ruleKeys{QStringLiteral("id"), QStringLiteral("title"), QStringLiteral("description"),
+                           QStringLiteral("enabled"), QStringLiteral("match")};
+    if (schema == QJsonValue(2))
+        ruleKeys.insert(QStringLiteral("behavior"));
     for (const auto &value : array) {
         const auto rule = value.toObject();
         const QString id = rule.value(QStringLiteral("id")).toString();
         const QString normalizedId = QUuid(id).toString(QUuid::WithoutBraces);
         if (!value.isObject() ||
-            !onlyKeys(rule, {QStringLiteral("id"), QStringLiteral("title"), QStringLiteral("description"),
-                             QStringLiteral("enabled"), QStringLiteral("match")}) ||
+            !onlyKeys(rule, ruleKeys) ||
             !validString(rule.value(QStringLiteral("id")), 38, false) || QUuid(id).isNull() ||
             ids.contains(normalizedId) || !validString(rule.value(QStringLiteral("title")), 256, false) ||
             !validString(rule.value(QStringLiteral("description")), 4096) ||
@@ -134,6 +139,13 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
             return invalid(text("A rule has missing, invalid or duplicate fields."));
         }
         ids.insert(normalizedId);
+        if (schema == QJsonValue(2)) {
+            const auto behavior = rule.value(QStringLiteral("behavior"));
+            if (!behavior.isObject() || !onlyKeys(behavior.toObject(), {QStringLiteral("startInTray")}) ||
+                !behavior.toObject().value(QStringLiteral("startInTray")).isBool()) {
+                return invalid(text("A rule has missing or invalid behavior settings."));
+            }
+        }
         const auto match = rule.value(QStringLiteral("match")).toObject();
         const auto types = match.value(QStringLiteral("windowTypes"));
         if (!onlyKeys(match, matchKeys) || !types.isArray() || types.toArray().isEmpty() ||
@@ -177,7 +189,12 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
         if (!hasIdentity) {
             return invalid(text("Select an application ID, window class or instance for each rule."));
         }
-        result.append(rule.toVariantMap());
+        auto decoded = rule.toVariantMap();
+        if (schema == QJsonValue(1)) {
+            // Upgrade in memory; leave the stored document intact until Apply/OK.
+            decoded.insert(QStringLiteral("behavior"), QVariantMap{{QStringLiteral("startInTray"), true}});
+        }
+        result.append(decoded);
     }
     rules = result;
     return true;
@@ -380,6 +397,9 @@ QString ruleSummary(const QVariantMap &rule) {
     if (!match.value(QStringLiteral("includeChildren")).toBool()) {
         parts.append(text("No child windows"));
     }
+    parts.append(rule.value(QStringLiteral("behavior")).toMap().value(QStringLiteral("startInTray")).toBool()
+                     ? text("Initially hide in tray")
+                     : text("Pin without initially hiding"));
     return parts.join(QStringLiteral(" · "));
 }
 
