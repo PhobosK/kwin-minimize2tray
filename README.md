@@ -49,7 +49,7 @@ Hide windows to the system tray, similar to [KDocker](https://github.com/user-no
 
 Proper distribution packages will be available eventually, for now you can install it manually.
 
-**You will need to install any required dependencies**, see [#9 Note build dependencies](https://github.com/luisbocanegra/kwin-minimize2tray/issues/9)
+Install Python 3.12+, CMake 3.19+, a C++20 compiler, ECM, Qt 6.6+ development files (DBus, Gui, Qml, Widgets) and the required KF6 development files. Current sources use Config, CoreAddons, Service, StatusNotifierItem, KCMUtils and XmlGui; older upstream sources also need KPackage. The RPM spec lists the openSUSE requirements; see also [the original dependency notes](https://github.com/luisbocanegra/kwin-minimize2tray/issues/9).
 
 ```sh
 git clone https://github.com/PhobosK/kwin-minimize2tray.git
@@ -57,9 +57,32 @@ cd kwin-minimize2tray
 ./install.sh
 ```
 
+The default resolves the latest stable release tag in **PhobosK's fork**, builds an isolated snapshot and installs both the script and native plugins system-wide under `/usr`. Only the final checked file copies use sudo. Run the installer as a regular user. It never synchronizes the checkout or deletes `build/`.
+
+To build unpublished changes in this checkout, use `./install.sh --local` or `./install-immutable.sh --local`. Local snapshots include only build inputs, not Git data or developer artifacts. With no explicit override, local version discovery uses the existing CMake logic, including its editable setting and nearest reachable tag.
+
+Both installers accept:
+
+- `--source fork` (default) or `--source upstream`; the selected repository is authoritative.
+- `--version 1.2.3` to select a published `1.2.3`/`v1.2.3` tag, or `--tag TAG` for an exact name.
+- `--revision FULL_SHA --app-version 1.2.3` for a full 40-digit commit and explicit application version.
+- `--app-version 1.2.3` to override the derived application/package version, including for non-SemVer tags. It takes precedence over tag metadata and local CMake discovery.
+- `--prefix /absolute/path`, `--jobs 4`, and extra build options such as `--cmake-arg=-DCMAKE_EXPORT_COMPILE_COMMANDS=OFF`. Source identity and install-directory options remain controlled by the installer.
+- `--destdir /tmp/minimize2tray-stage` for a staged installation into a **new** directory, without sudo or installation into the session.
+
+Latest means the numerically greatest stable `X.Y.Z` or `vX.Y.Z` tag across all tag pages, independent of tag dates, API order or ancestry. Prerelease and other tag formats are reported and excluded from automatic selection; select them explicitly with `--tag` (non-SemVer names need `--app-version`). Equivalent version tags pointing at different commits require an exact tag choice. The chosen tag is resolved to a full commit before downloading. Explicit prerelease versions retain their application spelling. No hashes, counts or dirty markers are appended to application versions.
+
+Network errors, missing tags and GitHub rate limits fail without selecting another source/version. To prepare reusable, checked sources:
+
+```sh
+python3 distro/source.py prepare --source upstream --version 0.1.0 --output /tmp/minimize2tray-source
+```
+
+The output contains a source archive and its JSON lock (repository, tag, full revision, versions, capabilities and SHA-256 checksums). Use `--lock /path/to/source.lock.json --archive /path/to/source.tar.gz` on either installer to build entirely offline. A lock alone skips tag discovery but still downloads its pinned commit and verifies the original bytes. Local locks always require their prepared archive. Artifact filenames include the owner, application version and revision or local snapshot digest. Existing output artifacts are never overwritten. Installed `source.json` records provenance; a lock fixes versions and cannot be combined with `--app-version`.
+
 ### Immutable distributions
 
-1. Run `./install-immutable.sh` to install
+1. Run `./install-immutable.sh` to install the selected release for the current user under `~/.local`, or add `--local` for unpublished changes. It requires no sudo.
 2. Add the QML and Qt plugin paths so the tray and native configuration modules can be found:
 
     Create the file `~/.config/plasma-workspace/env/path.sh` (and folders if they don't exist) with the following:
@@ -71,11 +94,40 @@ cd kwin-minimize2tray
 
 3. Log-out or reboot to apply the change
 
+`--prefix` changes these paths accordingly; the installer prints the required import directories. It does not edit session environment files or enable/reconfigure KWin. When switching between user and system installation, remove the previous copy yourself: a user script can shadow a system script. Existing installations are not automatically deleted.
+
+### openSUSE Tumbleweed RPM
+
+Use the standalone spec; no Python helper or preparation command is needed. Install Git before invoking RPM, since online tag discovery runs while the spec is parsed.
+
+For the **PhobosK fork** (default):
+
+```sh
+rpmbuild -ba distro/rpm/kwin6-script-minimize2tray.spec
+```
+
+For the **original upstream**:
+
+```sh
+rpmbuild -ba --with upstream distro/rpm/kwin6-script-minimize2tray.spec
+```
+
+The greatest numeric stable `X.Y.Z` or `vX.Y.Z` tag in the selected repository supplies the RPM and application version. Prerelease/non-version tags are excluded; equivalent spellings prefer `v`. RPM downloads a missing source archive automatically. Network errors stop the build.
+
+To select a fixed tag and skip online discovery:
+
+```sh
+rpmbuild -ba --define 'tag v0.1.0' distro/rpm/kwin6-script-minimize2tray.spec
+```
+
+Add `--with upstream` as needed. With the archive already in RPM's `SOURCES` directory, fixed selections work offline. `--define 'upstream_version 0.1.0'` selects `v0.1.0`; an explicit `tag` overrides that spelling. Non-version tags need an explicit `upstream_version`. A pinned commit uses `--define 'commit FULL_SHA' --define 'upstream_version 0.1.0'`. Cache filenames distinguish the owner and tag/commit. Older release metadata is stamped before building; the native KCM is packaged when present.
+
 ### Build version
 
 Set `MINIMIZE2TRAY_VERSION` in `CMakeLists.txt` to choose the version, or leave it empty to use the nearest Git version tag with its leading `v` removed, falling back to `package/metadata.json`.
 An explicit `-DMINIMIZE2TRAY_VERSION=1.2.3` overrides this setting.
 Configure with `-DPACKAGE_SCRIPT=ON` to generate a `.kwinscript` archive in the build directory.
+For a persistent developer build, run `cmake -S . -B build` and `cmake --build build`. The compilation database is `build/compile_commands.json`; `-DCMAKE_EXPORT_COMPILE_COMMANDS=OFF` disables it. Installers use disposable builds and do not maintain a repository-root symlink.
 
 ## Configuration/Usage
 
