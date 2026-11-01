@@ -1,0 +1,11 @@
+kwin6-script-minimize2tray (0.6.0-1); urgency=medium
+
+  * Add Debian/Ubuntu source preparation and packaging for release 0.6.0.
+
+ -- PhobosK <PhobosK@users.noreply.github.com>  Sun, 01 Nov 2026 10:59:48 +0200
+
+kwin6-script-minimize2tray (0.5.0-1); urgency=medium
+
+  * Package the PhobosK fork with its native tray and configuration modules.
+
+ -- PhobosK <PhobosK@users.noreply.github.com>  Sun, 01 Nov 2026 10:47:18 +0200

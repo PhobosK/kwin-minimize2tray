@@ -1,0 +1,22 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: KWin Minimize2Tray (PhobosK fork)
+Upstream-Contact: https://github.com/PhobosK/kwin-minimize2tray/issues
+Source: https://github.com/PhobosK/kwin-minimize2tray
+
+Files: *
+Copyright: Luis Bocanegra <luisbocanegra17b@gmail.com>
+           PhobosK <PhobosK@users.noreply.github.com>
+License: GPL-3
+
+License: GPL-3
+ This program is free software: you can redistribute it and/or modify
+ it under the terms of version 3 of the GNU General Public License as
+ published by the Free Software Foundation.
+ .
+ This program is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ GNU General Public License for more details.
+ .
+ On Debian systems, the complete license text is available in
+ /usr/share/common-licenses/GPL-3.

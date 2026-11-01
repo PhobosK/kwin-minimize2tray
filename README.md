@@ -35,7 +35,7 @@ cd kwin-minimize2tray
 
 Run as a regular user. The installer builds the fork's latest stable `X.Y.Z`/`vX.Y.Z` tag and installs under `/usr`, using sudo only for final copies. It leaves the checkout and existing `build/` alone. Network failures stop installation.
 
-Use `./install.sh --local` for unpublished checkout changes, or `./install.sh --version 0.5.0` for a specific release. Both installers offer `--help` for source selection, commit pinning, prefixes, staged installation and offline archives.
+Use `./install.sh --local` for unpublished checkout changes, or `./install.sh --version 0.6.0` for a specific release. Both installers offer `--help` for source selection, commit pinning, prefixes, staged installation and offline archives.
 
 ### Immutable/user installation
 
@@ -50,7 +50,7 @@ For a custom prefix, use the paths printed by the installer. A user installation
 
 ### openSUSE Tumbleweed RPM
 
-The standalone spec builds this fork only. It defaults to tag `v0.5.0`; `release_version` sets both the RPM and application version. It downloads the selected archive if missing from RPM's `SOURCES` directory.
+The standalone spec builds this fork only. It defaults to tag `v0.6.0`; `release_version` sets both the RPM and application version. It downloads the selected archive if missing from RPM's `SOURCES` directory.
 
 ```sh
 rpmbuild -ba distro/rpm/kwin6-script-minimize2tray.spec
@@ -65,10 +65,29 @@ rpmbuild -ba --define 'release_version 0.4.0' distro/rpm/kwin6-script-minimize2t
 Or select a full commit SHA with an explicit application version:
 
 ```sh
-rpmbuild -ba --define 'release_version 0.5.0' --define 'commit FULL_SHA' distro/rpm/kwin6-script-minimize2tray.spec
+rpmbuild -ba --define 'release_version 0.6.0' --define 'commit FULL_SHA' distro/rpm/kwin6-script-minimize2tray.spec
 ```
 
 The tag format is `vX.Y.Z`. Selected sources must contain this fork's native configuration module and current CMake version option.
+
+### Debian and Ubuntu packages
+
+The version in `distro/debian/changelog` selects the fork's `vX.Y.Z` tag and sets the package/application versions. Preparation needs Python 3.12+ and `dpkg-dev`:
+
+```sh
+./distro/debian/prepare.py /tmp/minimize2tray-deb
+```
+
+For a specific commit, add `--commit FULL_SHA`. `--archive /path/to/source.tar.gz` uses the matching GitHub archive offline. The output directory must be new. Use a new upstream changelog version when changing orig-archive contents.
+
+In the prepared source directory, install build dependencies and build:
+
+```sh
+sudo apt-get build-dep ./
+dpkg-buildpackage -us -uc
+```
+
+This targets Debian 13 and Ubuntu 26.10 with Plasma 6 development packages (Ubuntu needs Universe). Source selection and its checksum are recorded in the prepared package; the build performs no tag lookup or download. No container is required.
 
 ### Developer build
 

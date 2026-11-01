@@ -1,0 +1,30 @@
+Source: kwin6-script-minimize2tray
+Section: kde
+Priority: optional
+Maintainer: PhobosK <PhobosK@users.noreply.github.com>
+Build-Depends: debhelper-compat (= 13),
+               cmake (>= 3.19),
+               extra-cmake-modules (>= 6.0.0~),
+               qt6-base-dev (>= 6.6.0~),
+               qt6-declarative-dev (>= 6.6.0~),
+               libkf6config-dev (>= 6.0.0~),
+               libkf6coreaddons-dev (>= 6.0.0~),
+               libkf6kcmutils-dev (>= 6.0.0~),
+               libkf6service-dev (>= 6.0.0~),
+               libkf6statusnotifieritem-dev (>= 6.0.0~),
+               libkf6xmlgui-dev (>= 6.0.0~)
+Standards-Version: 4.7.4
+Rules-Requires-Root: no
+Homepage: https://github.com/PhobosK/kwin-minimize2tray
+
+Package: kwin6-script-minimize2tray
+Architecture: any
+Depends: ${misc:Depends},
+         ${shlibs:Depends},
+         kwin-common (>= 4:6.0.0~),
+         plasma-workspace (>= 4:6.0.0~),
+         qml6-module-qtquick
+Description: minimize windows to the system tray in KDE Plasma 6
+ KWin script with a native tray plugin and configuration module, providing
+ per-window startup, minimize and optional shortcut-based close actions.
+ This package contains the PhobosK fork of Minimize2Tray.
