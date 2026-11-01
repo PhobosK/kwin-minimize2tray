@@ -62,6 +62,9 @@ function setup(window) {
         enforceTrayManagedState(window);
     });
     watch(window.minimizedChanged, () => onMinimizeChanged(window));
+    watch(window.windowShown, () => {
+        if (!window.minimized) onMinimizeChanged(window);
+    });
     watch(window.skipTaskbarChanged, () => enforceTrayManagedState(window));
     watch(window.skipPagerChanged, () => enforceTrayManagedState(window));
     watch(window.skipSwitcherChanged, () => enforceTrayManagedState(window));
@@ -105,6 +108,7 @@ function formattedWindowInfo(w) {
 function addTrayIcon(window, automatic = false) {
     if (shuttingDown || isProtectedWindow(window)) return false;
     if (!automatic) {
+        cancelStartupProtection(window.internalId);
         // An explicit shortcut pin takes ownership independently of the rules.
         delete automaticPins[window.internalId];
         if (automaticDecisions[window.internalId] === "unpinned") automaticDecisions[window.internalId] = "shown";
@@ -134,6 +138,7 @@ function addTrayIcon(window, automatic = false) {
 
 function removeTrayIcon(window) {
     const windowId = window.internalId;
+    cancelStartupProtection(windowId);
     if (!(windowId in trayIcons)) {
         return;
     }
@@ -145,6 +150,7 @@ function removeTrayIcon(window) {
 
 function restoreManagedWindows() {
     shuttingDown = true;
+    cancelAllStartupProtection();
     reconcileTimer.stop();
     pendingWindows = new Object();
     disconnectSignals(workspaceConnections);
@@ -162,8 +168,103 @@ function restoreManagedWindows() {
     automaticDecisions = new Object();
 }
 
+function cancelStartupProtection(windowId, expected) {
+    const protection = startupProtections[windowId];
+    if (!protection || expected && protection !== expected) return false;
+    delete startupProtections[windowId];
+    protection.timer.stop();
+    protection.timer.destroy();
+    const window = getWindow(protection.windowId);
+    const hidden = hiddenWindows[windowId];
+    if (protection.pending && window && !window.minimized && hidden && hidden.automatic && hidden.reason === "startup") {
+        // A deferred retry temporarily retains skip flags; cancellation must release them.
+        automaticDecisions[windowId] = "shown";
+        releaseHiddenWindow(window, false);
+    }
+    return protection.pending;
+}
+
+function cancelAllStartupProtection() {
+    Object.keys(startupProtections).forEach(id => cancelStartupProtection(id));
+}
+
+function activeWindowBelongsTo(window) {
+    const visited = new Set();
+    for (let active = Workspace.activeWindow; active && !visited.has(active); active = active.transientFor) {
+        if (active === window) return true;
+        visited.add(active);
+    }
+    return false;
+}
+
+function cancelActiveStartupProtection() {
+    const visited = new Set();
+    for (let active = Workspace.activeWindow; active && !visited.has(active); active = active.transientFor) {
+        visited.add(active);
+        cancelStartupProtection(active.internalId);
+    }
+}
+
+function armStartupProtection(window) {
+    const windowId = window.internalId;
+    cancelStartupProtection(windowId);
+    const protection = {windowId: windowId, window: window, identity: JSON.stringify(windowInfo(window)),
+                        started: scriptConfig.monotonicMilliseconds(), pending: false};
+    const timer = startupProtectionComponent.createObject(root);
+    if (!timer) return;
+    protection.timer = timer;
+    startupProtections[windowId] = protection;
+    // Capture the token directly; createObject's initial properties can copy JS objects.
+    timer.triggered.connect(() => cancelStartupProtection(windowId, protection));
+    timer.start();
+}
+
+function startupProtectionApplies(window, protection) {
+    const windowId = window.internalId;
+    const hidden = hiddenWindows[windowId];
+    const age = scriptConfig.monotonicMilliseconds() - protection.started;
+    if (shuttingDown || startupProtections[windowId] !== protection || getWindow(windowId) !== window ||
+        !(windowId in trackedWindows) || !(windowId in automaticPins) || !(windowId in trayIcons) ||
+        !hidden || !hidden.automatic || hidden.reason !== "startup" || age < 0 || age >= 1500 ||
+        automaticDecisions[windowId] === "shown" || automaticDecisions[windowId] === "unpinned" ||
+        activeWindowBelongsTo(window) || JSON.stringify(windowInfo(window)) !== protection.identity) return false;
+    const behavior = scriptConfig.matchingBehavior(windowInfo(window));
+    return behavior.matched && behavior.startInTray && behavior.startupProtection;
+}
+
+function queueStartupRetry(window) {
+    const windowId = window.internalId;
+    const protection = startupProtections[windowId];
+    if (!protection) return false;
+    if (!startupProtectionApplies(window, protection)) {
+        cancelStartupProtection(windowId, protection);
+        return false;
+    }
+    if (!protection.pending) {
+        protection.pending = true;
+        // Let activation and explicit commands win before considering a retry.
+        // Use a distinct closure per window: callLater coalesces identical functions.
+        Qt.callLater(() => retryStartupProtection(windowId, protection));
+    }
+    return true;
+}
+
+function retryStartupProtection(windowId, protection) {
+    if (startupProtections[windowId] !== protection) return;
+    const window = getWindow(windowId);
+    if (!window || window !== protection.window || window.minimized || !startupProtectionApplies(window, protection)) {
+        cancelStartupProtection(windowId, protection);
+        return;
+    }
+    // Consume the sole retry before writing window state, including reentrant signals.
+    protection.pending = false;
+    cancelStartupProtection(windowId, protection);
+    hideWindow(window, true, "startup");
+}
+
 function hideWindow(window, automatic = false, reason = "manual") {
     const windowId = window.internalId;
+    if (reason !== "startup") cancelStartupProtection(windowId);
     if (shuttingDown || !(windowId in trayIcons) ||
         (!isValidWindow(window) && !scriptConfig.matchingBehavior(windowInfo(window)).matched)) return false;
     if (pendingActivation === windowId) pendingActivation = null;
@@ -186,6 +287,7 @@ function hideWindow(window, automatic = false, reason = "manual") {
 
 function releaseHiddenWindow(window, restore) {
     const windowId = window.internalId;
+    cancelStartupProtection(windowId);
     const hidden = hiddenWindows[windowId];
     if (!hidden) return;
     delete hiddenWindows[windowId];
@@ -196,6 +298,7 @@ function releaseHiddenWindow(window, restore) {
 }
 
 function setMinimize(minimize, window) {
+    cancelStartupProtection(window.internalId);
     window.minimized = minimize;
 }
 
@@ -231,14 +334,16 @@ function enforceTrayManagedState(window) {
 function toggleMinimize(windowId) {
     const window = getWindow(windowId);
     if (!window) return;
+    cancelStartupProtection(windowId);
     window.minimized = !window.minimized;
 }
 
-function toggleShowHide(windowId) {
+function toggleShowHide(windowId, forceShow = false) {
     const window = getWindow(windowId);
     if (!window) return;
 
-    if (window.minimized) {
+    const restoring = cancelStartupProtection(windowId);
+    if (window.minimized || restoring || forceShow) {
         automaticDecisions[windowId] = "shown";
         releaseHiddenWindow(window, true);
         window.minimized = false;
@@ -249,6 +354,7 @@ function toggleShowHide(windowId) {
 }
 
 function activateWindowInPlace(window) {
+    cancelStartupProtection(window.internalId);
     pendingActivation = window.internalId;
     const activities = window.activities;
     if (activities.length && activities.indexOf(Workspace.currentActivity) === -1) {
@@ -287,6 +393,7 @@ function onMinimizeChanged(window) {
     if (window.minimized && pendingActivation === windowId) pendingActivation = null;
     if (!window.minimized) {
         if (windowId in hiddenWindows) {
+            if (queueStartupRetry(window)) return;
             // External restores have no reliable user/application attribution.
             automaticDecisions[windowId] = "shown";
             releaseHiddenWindow(window, false);
@@ -325,12 +432,14 @@ function closeWindow(windowId) {
     if (!window) return;
 
     if (pendingActivation === windowId) pendingActivation = null;
+    cancelStartupProtection(windowId);
     window.closeWindow();
 }
 
 function unpinIcon(windowId) {
     const window = getWindow(windowId);
     if (!window) return;
+    cancelStartupProtection(windowId);
     automaticDecisions[windowId] = "unpinned";
     removeTrayIcon(window);
     releaseHiddenWindow(window, true);
@@ -379,6 +488,7 @@ function isProtectedWindow(window) {
 
 function scheduleWindow(window) {
     if (shuttingDown) return;
+    cancelStartupProtection(window.internalId);
     pendingWindows[window.internalId] = true;
     reconcileTimer.restart();
 }
@@ -434,7 +544,9 @@ function reconcileWindows() {
         if (windowId in automaticPins && behavior.startInTray &&
             (!previous.matched || !previous.startInTray || needsIcon) &&
             automaticDecisions[windowId] !== "shown") {
-            hideWindow(window, true, "startup");
+            // Protection belongs only to this initial automatic hide, not later actions.
+            if (behavior.startupProtection && !window.minimized) armStartupProtection(window);
+            if (!hideWindow(window, true, "startup")) cancelStartupProtection(windowId);
         } else if (window.minimized && behavior.minimizeToTray && !(windowId in hiddenWindows)) {
             hideWindow(window, true, "minimize");
         }

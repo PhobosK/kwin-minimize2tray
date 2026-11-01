@@ -12,6 +12,7 @@
 #include <QStandardPaths>
 
 ScriptConfig::ScriptConfig(QObject *parent) : QObject(parent), m_config(QStringLiteral("kwinrc")) {
+    m_elapsed.start();
     m_reloadTimer.setSingleShot(true);
     connect(&m_reloadTimer, &QTimer::timeout, this, &ScriptConfig::reload);
     const auto scheduleReload = [this]() { m_reloadTimer.start(); };
@@ -70,6 +71,7 @@ QVariantMap ScriptConfig::matchingBehavior(const QVariantMap &window) const {
     bool matched = false;
     bool autoPin = false;
     bool startInTray = false;
+    bool startupProtection = false;
     bool closeToTray = false;
     bool minimizeEnabled = false;
     bool minimizeDisabled = false;
@@ -80,7 +82,9 @@ QVariantMap ScriptConfig::matchingBehavior(const QVariantMap &window) const {
         matched = true;
         const auto behavior = rule.value(QStringLiteral("behavior")).toMap();
         autoPin = autoPin || behavior.value(QStringLiteral("autoPin")).toBool();
-        startInTray = startInTray || behavior.value(QStringLiteral("startInTray")).toBool();
+        const bool start = behavior.value(QStringLiteral("startInTray")).toBool();
+        startInTray = startInTray || start;
+        startupProtection = startupProtection || (start && behavior.value(QStringLiteral("startupProtection")).toBool());
         closeToTray = closeToTray || behavior.value(QStringLiteral("closeToTray")).toBool();
         const QString minimize = behavior.value(QStringLiteral("minimizeToTray")).toString();
         minimizeEnabled = minimizeEnabled || minimize == QLatin1String("enabled");
@@ -91,7 +95,7 @@ QVariantMap ScriptConfig::matchingBehavior(const QVariantMap &window) const {
         (!minimizeDisabled && m_values.value(QStringLiteral("hideOnMinimize")).toBool());
     return {{QStringLiteral("matched"), matched}, {QStringLiteral("autoPin"), autoPin},
             {QStringLiteral("startInTray"), startInTray}, {QStringLiteral("minimizeToTray"), minimizeToTray},
-            {QStringLiteral("closeToTray"), closeToTray}};
+            {QStringLiteral("closeToTray"), closeToTray}, {QStringLiteral("startupProtection"), startupProtection}};
 }
 
 QVariantList ScriptConfig::windows() {

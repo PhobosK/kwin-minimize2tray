@@ -64,13 +64,14 @@ QVariantMap newRule() {
         {QStringLiteral("behavior"), QVariantMap{{QStringLiteral("autoPin"), false},
                                                 {QStringLiteral("startInTray"), true},
                                                 {QStringLiteral("minimizeToTray"), QStringLiteral("inherit")},
-                                                {QStringLiteral("closeToTray"), false}}},
+                                                {QStringLiteral("closeToTray"), false},
+                                                {QStringLiteral("startupProtection"), false}}},
         {QStringLiteral("match"), QVariantMap{{QStringLiteral("windowTypes"), QStringList{QStringLiteral("normal")}},
                                               {QStringLiteral("includeChildren"), false}}}};
 }
 
 QString encodeRules(const QVariantList &rules, bool indented) {
-    return QString::fromUtf8(QJsonDocument(QJsonObject{{QStringLiteral("schemaVersion"), 3},
+    return QString::fromUtf8(QJsonDocument(QJsonObject{{QStringLiteral("schemaVersion"), 4},
                                                        {QStringLiteral("rules"), QJsonArray::fromVariantList(rules)}})
                                  .toJson(indented ? QJsonDocument::Indented : QJsonDocument::Compact));
 }
@@ -109,7 +110,7 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
     const auto root = doc.object();
     const auto schema = root.value(QStringLiteral("schemaVersion"));
     if (!onlyKeys(root, {QStringLiteral("schemaVersion"), QStringLiteral("rules")}) ||
-        (schema != QJsonValue(1) && schema != QJsonValue(2) && schema != QJsonValue(3)) ||
+        (schema != QJsonValue(1) && schema != QJsonValue(2) && schema != QJsonValue(3) && schema != QJsonValue(4)) ||
         !root.value(QStringLiteral("rules")).isArray()) {
         return invalid(text("Unsupported rule format or schema version."));
     }
@@ -145,15 +146,17 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
         if (schema != QJsonValue(1)) {
             const auto behavior = rule.value(QStringLiteral("behavior"));
             const auto object = behavior.toObject();
-            const QSet<QString> keys = schema == QJsonValue(2)
+            QSet<QString> keys = schema == QJsonValue(2)
                 ? QSet<QString>{QStringLiteral("startInTray")}
                 : QSet<QString>{QStringLiteral("autoPin"), QStringLiteral("startInTray"),
                                 QStringLiteral("minimizeToTray"), QStringLiteral("closeToTray")};
+            if (schema == QJsonValue(4))
+                keys.insert(QStringLiteral("startupProtection"));
             if (!behavior.isObject() || !onlyKeys(object, keys) ||
                 !object.value(QStringLiteral("startInTray")).isBool()) {
                 return invalid(text("A rule has missing or invalid behavior settings."));
             }
-            if (schema == QJsonValue(3) &&
+            if (schema != QJsonValue(2) &&
                 (!object.value(QStringLiteral("autoPin")).isBool() ||
                  !object.value(QStringLiteral("closeToTray")).isBool() ||
                  !QStringList{QStringLiteral("inherit"), QStringLiteral("enabled"), QStringLiteral("disabled")}
@@ -161,6 +164,12 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
                  (object.value(QStringLiteral("autoPin")).toBool() &&
                   object.value(QStringLiteral("startInTray")).toBool()))) {
                 return invalid(text("A rule has invalid action settings or conflicting startup actions."));
+            }
+            if (schema == QJsonValue(4) &&
+                (!object.value(QStringLiteral("startupProtection")).isBool() ||
+                 (object.value(QStringLiteral("startupProtection")).toBool() &&
+                  !object.value(QStringLiteral("startInTray")).toBool()))) {
+                return invalid(text("Startup protection requires Start in tray and a boolean setting."));
             }
         }
         const auto match = rule.value(QStringLiteral("match")).toObject();
@@ -207,7 +216,7 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
             return invalid(text("Select an application ID, window class or instance for each rule."));
         }
         auto decoded = rule.toVariantMap();
-        if (schema != QJsonValue(3)) {
+        if (schema == QJsonValue(1) || schema == QJsonValue(2)) {
             // Upgrade in memory; leave the stored document intact until Apply/OK.
             const bool start = schema == QJsonValue(1) ||
                                decoded.value(QStringLiteral("behavior")).toMap().value(QStringLiteral("startInTray")).toBool();
@@ -215,6 +224,11 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
                            QVariantMap{{QStringLiteral("autoPin"), !start}, {QStringLiteral("startInTray"), start},
                                        {QStringLiteral("minimizeToTray"), QStringLiteral("inherit")},
                                        {QStringLiteral("closeToTray"), false}});
+        }
+        if (schema != QJsonValue(4)) {
+            auto behavior = decoded.value(QStringLiteral("behavior")).toMap();
+            behavior.insert(QStringLiteral("startupProtection"), false);
+            decoded.insert(QStringLiteral("behavior"), behavior);
         }
         result.append(decoded);
     }
@@ -423,6 +437,8 @@ QString ruleSummary(const QVariantMap &rule) {
     parts.append(behavior.value(QStringLiteral("startInTray")).toBool() ? text("Start in tray")
                  : behavior.value(QStringLiteral("autoPin")).toBool() ? text("Pin without initially hiding")
                                                                      : text("No startup action"));
+    if (behavior.value(QStringLiteral("startupProtection")).toBool())
+        parts.append(text("Retry early startup restoration once"));
     const QString minimize = behavior.value(QStringLiteral("minimizeToTray")).toString();
     parts.append(minimize == QLatin1String("enabled") ? text("Minimize to tray: on")
                  : minimize == QLatin1String("disabled") ? text("Minimize to tray: off")

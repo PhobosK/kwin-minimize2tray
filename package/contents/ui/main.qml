@@ -16,12 +16,18 @@ Item {
     property var automaticPins: new Object()
     property var automaticDecisions: new Object()
     property var hiddenWindows: new Object()
+    property var startupProtections: new Object()
     property var trackedWindows: new Object()
     property var pendingWindows: new Object()
     property var pendingActivation: null
     readonly property Component trayIconComponent: TrayIcon {
         countUseDot: root.countUseDot
         countDisplayLimit: root.countDisplayLimit
+    }
+
+    // Each startup attempt has its own one-shot expiry, never a polling loop.
+    readonly property Component startupProtectionComponent: Timer {
+        interval: 1500
     }
 
     ScriptConfig {
@@ -31,6 +37,7 @@ Item {
     }
 
     function reloadConfig() {
+        Utils.cancelAllStartupProtection();
         const config = scriptConfig.values;
         debugEnabled = config.debugEnabled;
         countUseDot = config.countUseDot;
@@ -57,7 +64,8 @@ Item {
             }
             if (!Utils.isValidWindow(window))
                 return;
-            if (Utils.addTrayIcon(window)) Utils.toggleShowHide(window.internalId);
+            const restoring = Utils.cancelStartupProtection(window.internalId);
+            if (Utils.addTrayIcon(window)) Utils.toggleShowHide(window.internalId, restoring);
         }
     }
 
@@ -69,6 +77,7 @@ Item {
     }
 
     Component.onCompleted: {
+        Utils.connectSignal(workspaceConnections, Workspace.windowActivated, () => Utils.cancelActiveStartupProtection());
         Utils.connectSignal(workspaceConnections, Workspace.currentActivityChanged, () => Utils.finishWindowActivation());
         Utils.connectSignal(workspaceConnections, Workspace.windowAdded, window => {
             Utils.setup(window);

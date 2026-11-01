@@ -2,6 +2,7 @@
 
 #include <KConfig>
 #include <KDirWatch>
+#include <QElapsedTimer>
 #include <QObject>
 #include <QPointer>
 #include <QTimer>
@@ -18,6 +19,8 @@ class ScriptConfig : public QObject {
     explicit ScriptConfig(QObject *parent = nullptr);
     ~ScriptConfig() override;
     QVariantMap values() const { return m_values; }
+    // Monotonic deadlines for bounded startup protection, unaffected by wall-clock changes.
+    Q_INVOKABLE qint64 monotonicMilliseconds() const { return m_elapsed.elapsed(); }
     Q_INVOKABLE void showAbout();
     Q_INVOKABLE void configure();
     Q_INVOKABLE bool isProtected(const QVariantMap &window) const;
@@ -40,6 +43,7 @@ class ScriptConfig : public QObject {
     QPointer<QDialog> m_configDialog;
     KDirWatch m_watch;
     QTimer m_reloadTimer;
+    QElapsedTimer m_elapsed;
     QVariantMap m_values;
     QVariantList m_windows;
     QString m_error;

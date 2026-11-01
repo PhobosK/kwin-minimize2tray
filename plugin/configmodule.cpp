@@ -388,6 +388,15 @@ class RuleDialog : public QDialog {
         m_startup->setCurrentIndex(behavior.value(QStringLiteral("startInTray")).toBool() ? 2
                                   : behavior.value(QStringLiteral("autoPin")).toBool() ? 1 : 0);
         actions->addRow(tr("Startup:"), m_startup);
+        m_startupProtection = new QCheckBox(tr("Retry early startup restoration once"));
+        m_startupProtection->setObjectName(QStringLiteral("startupProtection"));
+        m_startupProtection->setChecked(behavior.value(QStringLiteral("startupProtection")).toBool());
+        m_startupProtection->setEnabled(m_startup->currentData() == QLatin1String("hide"));
+        m_startupProtection->setToolTip(tr("For 1.5 seconds after startup hiding, retry one unminimize that does not "
+                                          "activate the window. Show, Unpin and activation cancel the retry. "
+                                          "KWin cannot reliably distinguish application and user restores; leave "
+                                          "this off if it interferes with restoration."));
+        actions->addRow(QString(), m_startupProtection);
         m_minimize = new QComboBox;
         m_minimize->setObjectName(QStringLiteral("minimizeToTray"));
         m_minimize->addItem(tr("Use global Hide on minimize setting"), QStringLiteral("inherit"));
@@ -534,7 +543,11 @@ class RuleDialog : public QDialog {
         connect(m_type, &QComboBox::currentIndexChanged, this, &RuleDialog::edited);
         connect(m_children, &QCheckBox::toggled, this, &RuleDialog::edited);
         connect(m_enabled, &QCheckBox::toggled, this, &RuleDialog::edited);
-        connect(m_startup, &QComboBox::currentIndexChanged, this, &RuleDialog::edited);
+        connect(m_startup, &QComboBox::currentIndexChanged, this, [this]() {
+            m_startupProtection->setEnabled(m_startup->currentData() == QLatin1String("hide"));
+            edited();
+        });
+        connect(m_startupProtection, &QCheckBox::toggled, this, &RuleDialog::edited);
         connect(m_minimize, &QComboBox::currentIndexChanged, this, &RuleDialog::edited);
         connect(m_close, &QCheckBox::toggled, this, &RuleDialog::edited);
         connect(m_title, &QLineEdit::textChanged, this, &RuleDialog::edited);
@@ -551,7 +564,9 @@ class RuleDialog : public QDialog {
             QVariantMap{{QStringLiteral("autoPin"), m_startup->currentData() == QLatin1String("pin")},
                         {QStringLiteral("startInTray"), m_startup->currentData() == QLatin1String("hide")},
                         {QStringLiteral("minimizeToTray"), m_minimize->currentData()},
-                        {QStringLiteral("closeToTray"), m_close->isChecked()}};
+                        {QStringLiteral("closeToTray"), m_close->isChecked()},
+                        {QStringLiteral("startupProtection"), m_startup->currentData() == QLatin1String("hide") &&
+                                                               m_startupProtection->isChecked()}};
         QVariantMap match{{QStringLiteral("windowTypes"), m_type->currentData()},
                           {QStringLiteral("includeChildren"), !m_children->isChecked()}};
         for (auto it = m_conditions.begin(); it != m_conditions.end(); ++it) {
@@ -810,6 +825,7 @@ class RuleDialog : public QDialog {
     QPlainTextEdit *m_description;
     QCheckBox *m_enabled;
     QComboBox *m_startup;
+    QCheckBox *m_startupProtection;
     QComboBox *m_minimize;
     QCheckBox *m_close;
     QComboBox *m_type;
@@ -1069,7 +1085,8 @@ class Minimize2TrayConfig : public KCModule {
         const auto previousSchema =
             QJsonDocument::fromJson(previousRules.toUtf8()).object().value(QStringLiteral("schemaVersion"));
         const QString backupKey = previousSchema == QJsonValue(1) ? QStringLiteral("rulesSchema1Backup")
-                                  : previousSchema == QJsonValue(2) ? QStringLiteral("rulesSchema2Backup") : QString();
+                                  : previousSchema == QJsonValue(2) ? QStringLiteral("rulesSchema2Backup")
+                                  : previousSchema == QJsonValue(3) ? QStringLiteral("rulesSchema3Backup") : QString();
         if (!backupKey.isEmpty() && !group.hasKey(backupKey)) {
             if (group.isEntryImmutable(backupKey)) {
                 saveError(tr("The rule migration backup is locked by the system administrator."));
