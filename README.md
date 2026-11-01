@@ -10,46 +10,22 @@ Hide windows to the system tray, similar to [KDocker](https://github.com/user-no
 
 ![preview](screenshots/preview.png)
 
-> [!IMPORTANT]
-> Some applications like Google Chrome or Chromium/Electron based may run in Xwayland mode and have issues hiding from taskbar or minimizing on startup, enabling native Wayland support for them can help. Usually setting an environment variable or command-line argument with KDE's `kmenuedit` is needed, refer to [Wayland - ArchWiki](https://wiki.archlinux.org/title/Wayland#GUI_libraries) or search "linux APP_NAME enable wayland support".
->
-> To verify if an application is running on Xwayland instead of Wayland use the KWin Debug Console.
-> ![wayland](screenshots/wayland.png)
+Some Chromium/Electron applications need native Wayland mode for reliable hiding. Check their window type in KWin Debug Console and see the [Wayland notes](https://wiki.archlinux.org/title/Wayland#GUI_libraries).
+
+![wayland](screenshots/wayland.png)
 
 ## Features
 
-- Wayland support (X11 hasn't been tested but was [confirmed to work](https://github.com/luisbocanegra/kwin-minimize2tray/issues/25))
-- Should work with windows from any application **as long as they are minimizable**
-- Windows are hidden from Task Manager (taskbar), Task Switcher (Alt+Tab), Desktop Pager and restored when clicking on the tray icon
-- Per application visibility can be configured from System Tray widget configuration
-- Uses the desktop-file icon, including user overrides, with the window icon as fallback
-- Application and window status
-  - [Unity LauncherAPI](https://wiki.ubuntu.com/Unity/LauncherAPI)
-    - Counter: Top-right corner, with a configurable display limit (default `99+`) and optional dot style
-    - Progress bar: Bottom bar using the system highlight color
-    - Urgent: Sets *[NeedsAttention](https://api.kde.org/plasma-types.html#ItemStatus-enum)* status of icon
-
-    **Note:** Unity LauncherAPI doesn't specify a window so all the tray icons from the same application will get the same status
-
-    Counters must be supplied by the application. Notification history, tray images and tooltips are not treated as unread counts.
-
-  - *[Demands attention](https://invent.kde.org/plasma/kwin/-/blob/fc98b4bcbd80ba025994c2d31244d984a253ec66/src/window.h#L429)* from KWin will also set *[NeedsAttention](https://api.kde.org/plasma-types.html#ItemStatus-enum)* status of icon and works per window.
-
-### Fork additions and fixes
-
-- Searchable window rules with individual enable, edit and delete controls, KWin window detection, matching previews and JSON export. Existing class settings migrate automatically.
-- Independent per-rule startup and minimize actions, plus close-to-tray through an optional shortcut. Startup can pin without hiding, start in tray, or leave the window unmanaged until a later action.
-- Matching by application, class, instance, role, title and window type, with protection for child windows, modal dialogs and the script's own configuration windows.
-- Configuration changes take effect after Apply or OK. Removing the last matching rule removes automatic tray icons and restores windows hidden in the tray.
-- Desktop-file icon overrides and improvements to the existing Unity counters, dots, progress and urgency handling.
-- About and full configuration access from each tray menu, plus restoration that preserves window activity/desktop memberships, monitor and geometry.
-- Consistent build versioning, CMake script archives and an openSUSE RPM spec supporting this fork or upstream sources.
+- Minimize windows to tray and restore them without changing monitor, geometry, desktop or activity memberships. Showing a window switches to its assigned desktop/activity.
+- Searchable per-window rules with KWin detection, matching previews and JSON export. Apply/OK updates running windows immediately.
+- Independent startup and minimize actions, plus close-to-tray through an optional shortcut. Child windows, modal dialogs and system/configuration windows are protected by default.
+- Desktop-file icons, application-provided [Unity LauncherAPI](https://wiki.ubuntu.com/Unity/LauncherAPI) counters/progress/urgency, and per-window attention. Counts are shared between an app's windows; notifications are not unread counters.
+- About and configuration access from tray menus. Plasma currently does not display the action tooltips.
+- Wayland support and existing X11 compatibility; X11 support was [reported upstream](https://github.com/luisbocanegra/kwin-minimize2tray/issues/25).
 
 ## Installation
 
-Proper distribution packages will be available eventually, for now you can install it manually.
-
-Install Python 3.12+, CMake 3.19+, a C++20 compiler, ECM, Qt 6.6+ development files (DBus, Gui, Qml, Widgets) and the required KF6 development files. Current sources use Config, CoreAddons, Service, StatusNotifierItem, KCMUtils and XmlGui; older upstream sources also need KPackage. The RPM spec lists the openSUSE requirements; see also [the original dependency notes](https://github.com/luisbocanegra/kwin-minimize2tray/issues/9).
+Install Python 3.12+, CMake 3.19+, a C++20 compiler, ECM, Qt 6.6+ development files (DBus, Gui, Qml, Widgets) and KF6 development files (Config, CoreAddons, Service, StatusNotifierItem, KCMUtils, XmlGui). The RPM spec lists openSUSE dependencies.
 
 ```sh
 git clone https://github.com/PhobosK/kwin-minimize2tray.git
@@ -57,117 +33,70 @@ cd kwin-minimize2tray
 ./install.sh
 ```
 
-The default resolves the latest stable release tag in **PhobosK's fork**, builds an isolated snapshot and installs both the script and native plugins system-wide under `/usr`. Only the final checked file copies use sudo. Run the installer as a regular user. It never synchronizes the checkout or deletes `build/`.
+Run as a regular user. The installer builds the fork's latest stable `X.Y.Z`/`vX.Y.Z` tag and installs under `/usr`, using sudo only for final copies. It leaves the checkout and existing `build/` alone. Network failures stop installation.
 
-To build unpublished changes in this checkout, use `./install.sh --local` or `./install-immutable.sh --local`. Local snapshots include only build inputs, not Git data or developer artifacts. With no explicit override, local version discovery uses the existing CMake logic, including its editable setting and nearest reachable tag.
+Use `./install.sh --local` for unpublished checkout changes, or `./install.sh --version 0.5.0` for a specific release. Both installers offer `--help` for source selection, commit pinning, prefixes, staged installation and offline archives.
 
-Both installers accept:
+### Immutable/user installation
 
-- `--source fork` (default) or `--source upstream`; the selected repository is authoritative.
-- `--version 1.2.3` to select a published `1.2.3`/`v1.2.3` tag, or `--tag TAG` for an exact name.
-- `--revision FULL_SHA --app-version 1.2.3` for a full 40-digit commit and explicit application version.
-- `--app-version 1.2.3` to override the derived application/package version, including for non-SemVer tags. It takes precedence over tag metadata and local CMake discovery.
-- `--prefix /absolute/path`, `--jobs 4`, and extra build options such as `--cmake-arg=-DCMAKE_EXPORT_COMPILE_COMMANDS=OFF`. Source identity and install-directory options remain controlled by the installer.
-- `--destdir /tmp/minimize2tray-stage` for a staged installation into a **new** directory, without sudo or installation into the session.
-
-Latest means the numerically greatest stable `X.Y.Z` or `vX.Y.Z` tag across all tag pages, independent of tag dates, API order or ancestry. Prerelease and other tag formats are reported and excluded from automatic selection; select them explicitly with `--tag` (non-SemVer names need `--app-version`). Equivalent version tags pointing at different commits require an exact tag choice. The chosen tag is resolved to a full commit before downloading. Explicit prerelease versions retain their application spelling. No hashes, counts or dirty markers are appended to application versions.
-
-Network errors, missing tags and GitHub rate limits fail without selecting another source/version. To prepare reusable, checked sources:
+Run `./install-immutable.sh` to install under `~/.local` without sudo; add `--local` for checkout changes. Put these lines in `~/.config/plasma-workspace/env/path.sh`, creating its parent directories as needed, then log out and back in:
 
 ```sh
-python3 distro/source.py prepare --source upstream --version 0.1.0 --output /tmp/minimize2tray-source
+export QML_IMPORT_PATH="$HOME/.local/lib/qml:$QML_IMPORT_PATH"
+export QT_PLUGIN_PATH="$HOME/.local/lib/plugins:$QT_PLUGIN_PATH"
 ```
 
-The output contains a source archive and its JSON lock (repository, tag, full revision, versions, capabilities and SHA-256 checksums). Use `--lock /path/to/source.lock.json --archive /path/to/source.tar.gz` on either installer to build entirely offline. A lock alone skips tag discovery but still downloads its pinned commit and verifies the original bytes. Local locks always require their prepared archive. Artifact filenames include the owner, application version and revision or local snapshot digest. Existing output artifacts are never overwritten. Installed `source.json` records provenance; a lock fixes versions and cannot be combined with `--app-version`.
-
-### Immutable distributions
-
-1. Run `./install-immutable.sh` to install the selected release for the current user under `~/.local`, or add `--local` for unpublished changes. It requires no sudo.
-2. Add the QML and Qt plugin paths so the tray and native configuration modules can be found:
-
-    Create the file `~/.config/plasma-workspace/env/path.sh` (and folders if they don't exist) with the following:
-
-    ```sh
-    export QML_IMPORT_PATH="$HOME/.local/lib64/qml:$HOME/.local/lib/qml:$QML_IMPORT_PATH"
-    export QT_PLUGIN_PATH="$HOME/.local/lib64/plugins:$HOME/.local/lib/plugins:$QT_PLUGIN_PATH"
-    ```
-
-3. Log-out or reboot to apply the change
-
-`--prefix` changes these paths accordingly; the installer prints the required import directories. It does not edit session environment files or enable/reconfigure KWin. When switching between user and system installation, remove the previous copy yourself: a user script can shadow a system script. Existing installations are not automatically deleted.
+For a custom prefix, use the paths printed by the installer. A user installation can shadow a system copy; remove unwanted copies yourself. After updating native plugins, start a new Plasma session.
 
 ### openSUSE Tumbleweed RPM
 
-Use the standalone spec; no Python helper or preparation command is needed. Install Git before invoking RPM, since online tag discovery runs while the spec is parsed.
-
-For the **PhobosK fork** (default):
+The standalone spec builds this fork only. It defaults to tag `v0.5.0`; `release_version` sets both the RPM and application version. It downloads the selected archive if missing from RPM's `SOURCES` directory.
 
 ```sh
 rpmbuild -ba distro/rpm/kwin6-script-minimize2tray.spec
 ```
 
-For the **original upstream**:
+Select another tagged release:
 
 ```sh
-rpmbuild -ba --with upstream distro/rpm/kwin6-script-minimize2tray.spec
+rpmbuild -ba --define 'release_version 0.4.0' distro/rpm/kwin6-script-minimize2tray.spec
 ```
 
-The greatest numeric stable `X.Y.Z` or `vX.Y.Z` tag in the selected repository supplies the RPM and application version. Prerelease/non-version tags are excluded; equivalent spellings prefer `v`. RPM downloads a missing source archive automatically. Network errors stop the build.
-
-To select a fixed tag and skip online discovery:
+Or select a full commit SHA with an explicit application version:
 
 ```sh
-rpmbuild -ba --define 'tag v0.1.0' distro/rpm/kwin6-script-minimize2tray.spec
+rpmbuild -ba --define 'release_version 0.5.0' --define 'commit FULL_SHA' distro/rpm/kwin6-script-minimize2tray.spec
 ```
 
-Add `--with upstream` as needed. With the archive already in RPM's `SOURCES` directory, fixed selections work offline. `--define 'upstream_version 0.1.0'` selects `v0.1.0`; an explicit `tag` overrides that spelling. Non-version tags need an explicit `upstream_version`. A pinned commit uses `--define 'commit FULL_SHA' --define 'upstream_version 0.1.0'`. Cache filenames distinguish the owner and tag/commit. Older release metadata is stamped before building; the native KCM is packaged when present.
+The tag format is `vX.Y.Z`. Selected sources must contain this fork's native configuration module and current CMake version option.
 
-### Build version
+### Developer build
 
-Set `MINIMIZE2TRAY_VERSION` in `CMakeLists.txt` to choose the version, or leave it empty to use the nearest Git version tag with its leading `v` removed, falling back to `package/metadata.json`.
-An explicit `-DMINIMIZE2TRAY_VERSION=1.2.3` overrides this setting.
-Configure with `-DPACKAGE_SCRIPT=ON` to generate a `.kwinscript` archive in the build directory.
-For a persistent developer build, run `cmake -S . -B build` and `cmake --build build`. The compilation database is `build/compile_commands.json`; `-DCMAKE_EXPORT_COMPILE_COMMANDS=OFF` disables it. Installers use disposable builds and do not maintain a repository-root symlink.
+```sh
+cmake -S . -B build
+cmake --build build
+```
 
-## Configuration/Usage
+Set `MINIMIZE2TRAY_VERSION` in CMake or pass `-DMINIMIZE2TRAY_VERSION=1.2.3`. Otherwise CMake uses the nearest matching Git tag, then source metadata. `-DPACKAGE_SCRIPT=ON` creates a `.kwinscript` archive. Compilation commands are in `build/compile_commands.json`; disable them with `-DCMAKE_EXPORT_COMPILE_COMMANDS=OFF`.
 
-Enable/disable
+## Configuration and use
 
-1. *Minimize to tray* from *System Settings* > *Window Management* > *KWin Scripts*
+Enable **Minimize to Tray** in **System Settings → Window Management → KWin Scripts**. The default shortcut is **Meta+Alt+PgDown**, configurable under **Keyboard → Shortcuts → KWin**.
 
-By default the shortcut is set to `Meta+Alt+PgDown`, to change it:
+Open **Configure…** from a tray menu, then use **Add rule → Detect window properties**. Match an application, class, instance, role or title. Matching is case-sensitive: selected conditions use AND; enabled rules use OR. Use role/title conditions to distinguish separate windows of one app. Changes take effect with **Apply/OK**; Cancel discards edits.
 
-1. *System Settings* > *Keyboard* > *Shortcuts*
-2. From the list on the left select *KWin*
-3. Search for "Minimize window to tray" and change it to whatever you prefer
+Each rule offers:
 
-Open the script's configuration and use **Add rule → Detect window properties** to select an application window. Give the rule a name and description, then choose the detected properties that identify the windows to pin. Each rule can be edited, enabled, disabled or deleted; search covers names, descriptions and matching properties. **View as text** shows all rules as read-only JSON, with copy and save options.
+- **Startup:** No startup action, Pin without initially hiding, or Start in tray. Start in tray also applies to existing windows when a rule first matches.
+- **Minimize to tray:** On, Off, or the global default. For minimize-only handling, choose No startup action and Minimize On.
+- **Close to tray:** Uses the separately assigned **Close or hide window to tray** shortcut. It has no default binding and does not change Alt+F4. Titlebar/client close buttons, application Quit and tray Quit still close normally.
+- **Retry early startup restoration once:** Off by default. With Start in tray, allows one retry within 1.5 seconds if the window reopens without activation. Show, Unpin, Close, activation, matching-property/configuration changes and unload cancel it. KWin cannot identify who requested a restore; non-activating user restores can also be retried. Disable it if it interferes.
 
-New rules default to normal application windows and leave child windows and dialogs visible. Separate editors can also be normal windows: use a detected role, instance or title to distinguish them. A preview lists matching open windows and reasons for exclusions. Matching is case-sensitive; selected conditions are combined with AND, and enabled rules with OR. Modal dialogs, system surfaces, Minimize2Tray itself and its configuration hosts (System Settings and kcmshell6) cannot be hidden, including through the shortcut. Other dialog/utility windows require explicit rules.
+Overlapping rules combine actions: Start in tray wins over pin-only; Minimize On wins over Off, then the global default; any matching rule can enable Close or startup retry.
 
-Edits remain pending until **Apply** or **OK** on the main configuration page. Each rule has independent controls:
+**Show** prevents startup re-hiding; later minimize/close actions can hide again. **Unpin** suppresses automatic actions until the window stops matching all rules or is manually pinned again. Removing the last matching rule restores automatic tray-hidden windows; manual pins remain independent. Tray Quit closes only its associated window.
 
-- **Startup:** No startup action, Pin without initially hiding, or Start in tray. Pin-only preserves the current visibility, including ordinary minimization. Start in tray hides on first match, including existing windows when rules are applied.
-- **Minimize to tray:** On, Off, or Use global Hide on minimize setting. For a minimize-only rule, select No startup action and Minimize On: the window starts normally and gets a tray icon when minimized. Explicit Off prevents ordinary minimization from acquiring hidden-state skip flags.
-- **Close to tray through the optional shortcut:** Assign **Close or hide window to tray (according to window rules)** under System Settings → Keyboard → Shortcuts → KWin. It has no default key binding and does not reassign Alt+F4. It hides the active eligible window if a matching rule enables this action; otherwise it closes that window normally. Protected system and configuration windows are ignored. Titlebar Close, client-side close buttons, application Quit and the tray Quit action remain real close paths. KWin does not provide a cancellable script close hook. Native decoration-button rewiring would be theme-specific and cannot cover all close paths, so this feature is deliberately limited to the separate shortcut.
-
-Enabled matching rules combine their actions. Start in tray takes precedence over pin-only. For minimization, explicit On takes precedence over Off, which takes precedence over the global default. Close is enabled if any matching rule enables it. The global setting also applies to manually pinned windows without a matching rule. No startup action with both other actions Off performs no automatic tray management.
-
-Changing behavior updates existing windows without recreating their icons or losing badges. Disabling automatic startup/close hiding restores windows hidden by that action; disabling minimize handling restores their skip flags while leaving them ordinarily minimized. Icons already created by an action remain until Unpin, until no enabled action remains, or until the last rule stops matching. Removing the last matching rule removes automatic icons and restores tray-hidden windows; manual pins remain independent. Cosmetic edits preserve visibility.
-
-**Show** (including external restoration unless the startup retry below applies) prevents startup re-hiding. A later minimize or optional-close action can hide it again. **Unpin** suppresses all automatic actions while the window continues matching any rule; the optional close shortcut then closes normally. Decisions reset once the window stops matching all rules, or the shortcut manually pins it again. Tray Show/Hide and the original shortcut remain explicit hiding controls. Badge settings update existing icons. Deletions can be undone before applying; Cancel discards pending edits. Previewing open windows requires the script to be enabled; detection also works while it is disabled.
-
-For apps that undo initial hiding, enable **Retry early startup restoration once** in a Start in tray rule. This is off by default. It permits one deferred rehide within 1.5 seconds of the initial automatic hide, only while the window remains eligible and does not activate. Any matching Start in tray rule can enable it. Show, Unpin, Close, activation of the window or a child, matching-property changes, configuration reload and unload cancel protection immediately. Timers never extend or rearm after restoration; pin-only, ordinary minimize/close actions and already-minimized windows do not acquire protection. Placement and attention handling remain unchanged.
-
-KWin cannot reliably distinguish a user's unminimize from an application's. A non-activating external restore can be retried during this short, opt-in interval; activating restores are left visible, including application requests. Disable the option if it interferes with restoration. This does not handle every application startup sequence.
-
-Schemas 1–3 JSON upgrade in memory, retaining disabled states and existing actions; startup retry defaults Off. Schema 1/2 migration keeps the previous startup behavior, with Minimize inheriting the global setting and scoped Close Off. Apply/OK saves schema 4 and retains the original JSON as `rulesSchema1Backup`, `rulesSchema2Backup` or `rulesSchema3Backup`; existing backups are preserved. Cancel leaves the stored rule document unchanged. Previous comma-separated class settings migrate automatically on first use, retaining the original list as `legacyClassBackup`; imported rules preserve class-or-instance matching. An empty new rule list remains empty. Invalid or unsupported JSON is reported rather than overwritten; the running script keeps its last valid rules. Concurrent edits are detected before saving.
-
-Each managed window's tray menu has a separate Minimize2Tray group: **About** shows the installed Minimize2Tray metadata, and **Configure…** opens the full configuration page for all rules. These dialogs remain available if that window is unpinned or its rule is removed. All tray actions include explanatory tooltips for tray hosts that support them; Plasma's D-Bus menu importer currently does not forward action tooltips.
-
-Hiding leaves the window's activity and desktop memberships, monitor and geometry unchanged. **Show** and **Unpin** switch to an assigned activity and desktop before focusing the window, including when KWin is configured to bring activated windows to the current desktop. Windows assigned to all activities or desktops keep those assignments; explicit moves made while hidden are respected.
-
-Dialog sizes, page selection, search and selected rule are remembered in the existing script configuration group. Window position restoration is supported on X11; Wayland placement remains controlled by KWin. The native configuration module is built and installed alongside the tray plugin and requires KF6 KCMUtils and KXmlGui development files. After installing updated native plugins, start a new Plasma session once before live checks.
+Existing settings migrate with backups on Apply; startup retry defaults Off. Invalid rules are reported and retained. **View as text** exports read-only JSON.
 
 ## Acknowledgements
 
