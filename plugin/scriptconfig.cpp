@@ -3,12 +3,17 @@
 
 #include <KAboutApplicationDialog>
 #include <KAboutData>
-#include <KCMultiDialog>
 #include <KPluginMetaData>
+#include <QCoreApplication>
 #include <QDBusConnection>
+#include <QDBusMessage>
+#include <QDBusPendingCallWatcher>
+#include <QDBusPendingReply>
 #include <QDebug>
 #include <QDialog>
 #include <QMessageBox>
+#include <QProcess>
+#include <QProcessEnvironment>
 #include <QStandardPaths>
 
 ScriptConfig::ScriptConfig(QObject *parent) : QObject(parent), m_config(QStringLiteral("kwinrc")) {
@@ -28,6 +33,10 @@ ScriptConfig::ScriptConfig(QObject *parent) : QObject(parent), m_config(QStringL
 }
 
 ScriptConfig::~ScriptConfig() {
+    // QProcess belongs to the application until it exits: never wait for a child
+    // process on KWin's event loop, and never terminate an independently opened host.
+    if (m_configProcess)
+        m_configProcess->terminate();
     delete m_configDialog.data();
     delete m_aboutDialog.data();
     if (m_registered) {
@@ -148,22 +157,60 @@ void ScriptConfig::showAbout() {
 }
 
 void ScriptConfig::configure() {
-    if (!m_configDialog) {
+    const auto request = QDBusMessage::createMethodCall(
+        QString::fromLatin1(Minimize2Tray::ConfigService), QStringLiteral("/Minimize2Tray/Configuration"),
+        QString::fromLatin1(Minimize2Tray::ConfigService), QStringLiteral("activate"));
+    auto watcher = new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(request), this);
+    const auto finished = [this, watcher]() {
+        const QDBusPendingReply<> reply = *watcher;
+        watcher->deleteLater();
+        if (!reply.isError() || (m_configProcess && m_configProcess->state() != QProcess::NotRunning))
+            return;
+        const auto showError = [this](const QString &detail) {
+            if (!m_configDialog) {
+                m_configDialog = new QMessageBox(QMessageBox::Warning, tr("Minimize to Tray"),
+                                                 tr("Could not open configuration: %1").arg(detail), QMessageBox::Close);
+                m_configDialog->setAttribute(Qt::WA_DeleteOnClose);
+            }
+            showDialog(m_configDialog.data(), QStringLiteral("configuration-error"));
+        };
         const auto metadata = KPluginMetaData::findPluginById(QStringLiteral("kwin/effects/configs"),
                                                               QStringLiteral("kcm_minimize2tray"));
-        if (metadata.isValid()) {
-            auto dialog = new KCMultiDialog;
-            dialog->setWindowTitle(tr("Configure Minimize to Tray"));
-            // Use the same full module and arguments as the KWin Scripts configuration host.
-            dialog->addModule(metadata, {QString::fromLatin1(Minimize2Tray::ScriptId), QStringLiteral("KWin/Script")});
-            m_configDialog = dialog;
-        } else {
-            m_configDialog = new QMessageBox(QMessageBox::Warning, tr("Minimize to Tray"),
-                                             tr("The Minimize2Tray configuration module could not be loaded. Check "
-                                                "that the native plugins are installed."),
-                                             QMessageBox::Close);
+        const auto executable = QStandardPaths::findExecutable(QStringLiteral("kcmshell6"));
+        if (!metadata.isValid() || executable.isEmpty()) {
+            showError(tr("Check that kcmshell6 and the Minimize2Tray configuration module are installed."));
+            return;
         }
-        m_configDialog->setAttribute(Qt::WA_DeleteOnClose);
-    }
-    showDialog(m_configDialog.data(), QStringLiteral("configuration"));
+        // In-process widgets use KWin's internal QPA and its overlay layer. The
+        // standard KDE host provides normal Wayland/X11 window management instead.
+        auto process = new QProcess(QCoreApplication::instance());
+        m_configProcess = process;
+        auto environment = QProcessEnvironment::systemEnvironment();
+        if (environment.value(QStringLiteral("QT_QPA_PLATFORM")).contains(QLatin1String("org.kde.kwin.qpa")))
+            environment.remove(QStringLiteral("QT_QPA_PLATFORM"));
+        process->setProcessEnvironment(environment);
+        process->setProcessChannelMode(QProcess::ForwardedChannels);
+        connect(process, &QProcess::started, process, [owner = QPointer<ScriptConfig>(this), process]() {
+            if (!owner)
+                process->terminate();
+        });
+        connect(process, &QProcess::finished, process, &QObject::deleteLater);
+        connect(process, &QProcess::errorOccurred, process,
+                [owner = QPointer<ScriptConfig>(this), process, showError](QProcess::ProcessError error) {
+            if (error == QProcess::FailedToStart) {
+                if (owner)
+                    showError(process->errorString());
+                process->deleteLater();
+            }
+        });
+        process->start(executable, {QStringLiteral("--caption"), tr("Configure Minimize to Tray"),
+                                   QStringLiteral("--args"), QString::fromLatin1(Minimize2Tray::ScriptId) +
+                                       QStringLiteral(" KWin/Script"),
+                                   QStringLiteral("--"), metadata.fileName()});
+    };
+    // A disconnected bus can complete before the watcher signal is connected.
+    if (watcher->isFinished())
+        QTimer::singleShot(0, this, finished);
+    else
+        connect(watcher, &QDBusPendingCallWatcher::finished, this, finished);
 }

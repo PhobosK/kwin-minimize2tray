@@ -3,6 +3,7 @@
 #include <KConfigGroup>
 #include <KService>
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -59,6 +60,7 @@ QVariantMap newRule() {
     return {
         {QStringLiteral("id"), QUuid::createUuid().toString(QUuid::WithoutBraces)},
         {QStringLiteral("title"), text("New rule")},
+        {QStringLiteral("createdAt"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},
         {QStringLiteral("description"), QString()},
         {QStringLiteral("enabled"), true},
         {QStringLiteral("behavior"), QVariantMap{{QStringLiteral("autoPin"), false},
@@ -71,7 +73,7 @@ QVariantMap newRule() {
 }
 
 QString encodeRules(const QVariantList &rules, bool indented) {
-    return QString::fromUtf8(QJsonDocument(QJsonObject{{QStringLiteral("schemaVersion"), 4},
+    return QString::fromUtf8(QJsonDocument(QJsonObject{{QStringLiteral("schemaVersion"), 5},
                                                        {QStringLiteral("rules"), QJsonArray::fromVariantList(rules)}})
                                  .toJson(indented ? QJsonDocument::Indented : QJsonDocument::Compact));
 }
@@ -110,7 +112,8 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
     const auto root = doc.object();
     const auto schema = root.value(QStringLiteral("schemaVersion"));
     if (!onlyKeys(root, {QStringLiteral("schemaVersion"), QStringLiteral("rules")}) ||
-        (schema != QJsonValue(1) && schema != QJsonValue(2) && schema != QJsonValue(3) && schema != QJsonValue(4)) ||
+        (schema != QJsonValue(1) && schema != QJsonValue(2) && schema != QJsonValue(3) &&
+         schema != QJsonValue(4) && schema != QJsonValue(5)) ||
         !root.value(QStringLiteral("rules")).isArray()) {
         return invalid(text("Unsupported rule format or schema version."));
     }
@@ -130,6 +133,8 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
                            QStringLiteral("enabled"), QStringLiteral("match")};
     if (schema != QJsonValue(1))
         ruleKeys.insert(QStringLiteral("behavior"));
+    if (schema == QJsonValue(5))
+        ruleKeys.insert(QStringLiteral("createdAt"));
     for (const auto &value : array) {
         const auto rule = value.toObject();
         const QString id = rule.value(QStringLiteral("id")).toString();
@@ -142,6 +147,15 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
             !rule.value(QStringLiteral("enabled")).isBool() || !rule.value(QStringLiteral("match")).isObject()) {
             return invalid(text("A rule has missing, invalid or duplicate fields."));
         }
+        if (schema == QJsonValue(5)) {
+            const auto created = rule.value(QStringLiteral("createdAt"));
+            const auto date = QDateTime::fromString(created.toString(), Qt::ISODateWithMs);
+            // Null means the creation time of an older rule is unknown. Otherwise
+            // require a canonical UTC timestamp, so exported dates are unambiguous.
+            if (!created.isNull() && (!created.isString() || !date.isValid() ||
+                created.toString().size() != 24 || date.toUTC().toString(Qt::ISODateWithMs) != created.toString()))
+                return invalid(text("A rule has an invalid creation timestamp."));
+        }
         ids.insert(normalizedId);
         if (schema != QJsonValue(1)) {
             const auto behavior = rule.value(QStringLiteral("behavior"));
@@ -150,7 +164,7 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
                 ? QSet<QString>{QStringLiteral("startInTray")}
                 : QSet<QString>{QStringLiteral("autoPin"), QStringLiteral("startInTray"),
                                 QStringLiteral("minimizeToTray"), QStringLiteral("closeToTray")};
-            if (schema == QJsonValue(4))
+            if (schema == QJsonValue(4) || schema == QJsonValue(5))
                 keys.insert(QStringLiteral("startupProtection"));
             if (!behavior.isObject() || !onlyKeys(object, keys) ||
                 !object.value(QStringLiteral("startInTray")).isBool()) {
@@ -165,7 +179,7 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
                   object.value(QStringLiteral("startInTray")).toBool()))) {
                 return invalid(text("A rule has invalid action settings or conflicting startup actions."));
             }
-            if (schema == QJsonValue(4) &&
+            if ((schema == QJsonValue(4) || schema == QJsonValue(5)) &&
                 (!object.value(QStringLiteral("startupProtection")).isBool() ||
                  (object.value(QStringLiteral("startupProtection")).toBool() &&
                   !object.value(QStringLiteral("startInTray")).toBool()))) {
@@ -225,11 +239,13 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
                                        {QStringLiteral("minimizeToTray"), QStringLiteral("inherit")},
                                        {QStringLiteral("closeToTray"), false}});
         }
-        if (schema != QJsonValue(4)) {
+        if (schema == QJsonValue(1) || schema == QJsonValue(2) || schema == QJsonValue(3)) {
             auto behavior = decoded.value(QStringLiteral("behavior")).toMap();
             behavior.insert(QStringLiteral("startupProtection"), false);
             decoded.insert(QStringLiteral("behavior"), behavior);
         }
+        if (schema != QJsonValue(5))
+            decoded.insert(QStringLiteral("createdAt"), QVariant());
         result.append(decoded);
     }
     rules = result;
@@ -247,6 +263,7 @@ static QVariantList legacyRules(const KConfigGroup &group, QString &error) {
         }
         seen.insert(name);
         auto rule = newRule();
+        rule[QStringLiteral("createdAt")] = QVariant(); // Original creation time is unknown.
         const bool installedIdentity =
             !name.contains(QLatin1Char('/')) && !name.contains(QLatin1Char('\\')) && !name.contains(QLatin1Char(':'));
         const auto service = installedIdentity ? KService::serviceByStorageId(name.endsWith(QLatin1String(".desktop"))

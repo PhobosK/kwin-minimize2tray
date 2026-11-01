@@ -1,3 +1,9 @@
+kwin6-script-minimize2tray (0.6.1-1); urgency=medium
+
+  * Fix startup hiding, configuration stacking and rule sorting.
+
+ -- PhobosK <PhobosK@users.noreply.github.com>  Sun, 01 Nov 2026 16:11:38 +0200
+
 kwin6-script-minimize2tray (0.6.0-1); urgency=medium
 
   * Add Debian/Ubuntu source preparation and packaging for release 0.6.0.

@@ -6,6 +6,7 @@
 
 namespace Minimize2Tray {
 inline constexpr auto ScriptId = "com.github.luisbocanegra.minimize2tray";
+inline constexpr auto ConfigService = "com.github.luisbocanegra.Minimize2Tray.Configuration";
 inline constexpr auto ConfigGroup = "Script-com.github.luisbocanegra.minimize2tray";
 inline constexpr int MaxRules = 1024;
 

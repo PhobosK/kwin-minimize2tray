@@ -62,8 +62,14 @@ function setup(window) {
         enforceTrayManagedState(window);
     });
     watch(window.minimizedChanged, () => onMinimizeChanged(window));
-    watch(window.windowShown, () => {
-        if (!window.minimized) onMinimizeChanged(window);
+    // Window has no windowShown signal in KWin 6.8. hiddenChanged is the
+    // public visibility notification; minimizedChanged handles normal restores.
+    watch(window.hiddenChanged, () => {
+        if (!window.hidden && !window.minimized) onMinimizeChanged(window);
+    });
+    watch(window.readyForPaintingChanged, () => {
+        // Retry initial eligibility without disturbing an existing startup hide.
+        if (!(window.internalId in trayIcons)) scheduleWindow(window);
     });
     watch(window.skipTaskbarChanged, () => enforceTrayManagedState(window));
     watch(window.skipPagerChanged, () => enforceTrayManagedState(window));

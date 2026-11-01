@@ -9,6 +9,7 @@
 #include <QVariantMap>
 
 class QDialog;
+class QProcess;
 
 class ScriptConfig : public QObject {
     Q_OBJECT
@@ -40,7 +41,8 @@ class ScriptConfig : public QObject {
     void showDialog(QDialog *dialog, const QString &role);
     KConfig m_config;
     QPointer<QDialog> m_aboutDialog;
-    QPointer<QDialog> m_configDialog;
+    QPointer<QDialog> m_configDialog; // Launch errors only; the editor runs in kcmshell6.
+    QPointer<QProcess> m_configProcess;
     KDirWatch m_watch;
     QTimer m_reloadTimer;
     QElapsedTimer m_elapsed;

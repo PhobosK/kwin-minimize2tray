@@ -17,7 +17,7 @@ Some Chromium/Electron applications need native Wayland mode for reliable hiding
 ## Features
 
 - Minimize windows to tray and restore them without changing monitor, geometry, desktop or activity memberships. Showing a window switches to its assigned desktop/activity.
-- Searchable per-window rules with KWin detection, matching previews and JSON export. Apply/OK updates running windows immediately.
+- Searchable per-window rules, sorted by title or creation time, with KWin detection, matching previews and JSON export. Apply/OK updates running windows immediately.
 - Independent startup and minimize actions, plus close-to-tray through an optional shortcut. Child windows, modal dialogs and system/configuration windows are protected by default.
 - Desktop-file icons, application-provided [Unity LauncherAPI](https://wiki.ubuntu.com/Unity/LauncherAPI) counters/progress/urgency, and per-window attention. Counts are shared between an app's windows; notifications are not unread counters.
 - About and configuration access from tray menus. Plasma currently does not display the action tooltips.
@@ -25,7 +25,7 @@ Some Chromium/Electron applications need native Wayland mode for reliable hiding
 
 ## Installation
 
-Install Python 3.12+, CMake 3.19+, a C++20 compiler, ECM, Qt 6.6+ development files (DBus, Gui, Qml, Widgets) and KF6 development files (Config, CoreAddons, Service, StatusNotifierItem, KCMUtils, XmlGui). The RPM spec lists openSUSE dependencies.
+Install Python 3.12+, CMake 3.19+, a C++20 compiler, ECM, KDE’s `kcmshell6` configuration host, Qt 6.6+ development files (DBus, Gui, Qml, Widgets) and KF6 development files (Config, CoreAddons, Service, StatusNotifierItem, KCMUtils, XmlGui). The RPM spec lists openSUSE dependencies.
 
 ```sh
 git clone https://github.com/PhobosK/kwin-minimize2tray.git
@@ -35,7 +35,7 @@ cd kwin-minimize2tray
 
 Run as a regular user. The installer builds the fork's latest stable `X.Y.Z`/`vX.Y.Z` tag and installs under `/usr`, using sudo only for final copies. It leaves the checkout and existing `build/` alone. Network failures stop installation.
 
-Use `./install.sh --local` for unpublished checkout changes, or `./install.sh --version 0.6.0` for a specific release. Both installers offer `--help` for source selection, commit pinning, prefixes, staged installation and offline archives.
+Use `./install.sh --local` for unpublished checkout changes, or `./install.sh --version 0.6.1` for a specific release. Both installers offer `--help` for source selection, commit pinning, prefixes, staged installation and offline archives.
 
 ### Immutable/user installation
 
@@ -50,7 +50,7 @@ For a custom prefix, use the paths printed by the installer. A user installation
 
 ### openSUSE Tumbleweed RPM
 
-The standalone spec builds this fork only. It defaults to tag `v0.6.0`; `release_version` sets both the RPM and application version. It downloads the selected archive if missing from RPM's `SOURCES` directory.
+The standalone spec builds this fork only. It defaults to tag `v0.6.1`; `release_version` sets both the RPM and application version. It downloads the selected archive if missing from RPM's `SOURCES` directory.
 
 ```sh
 rpmbuild -ba distro/rpm/kwin6-script-minimize2tray.spec
@@ -65,7 +65,7 @@ rpmbuild -ba --define 'release_version 0.4.0' distro/rpm/kwin6-script-minimize2t
 Or select a full commit SHA with an explicit application version:
 
 ```sh
-rpmbuild -ba --define 'release_version 0.6.0' --define 'commit FULL_SHA' distro/rpm/kwin6-script-minimize2tray.spec
+rpmbuild -ba --define 'release_version 0.6.1' --define 'commit FULL_SHA' distro/rpm/kwin6-script-minimize2tray.spec
 ```
 
 The tag format is `vX.Y.Z`. Selected sources must contain this fork's native configuration module and current CMake version option.
@@ -103,6 +103,8 @@ Set `MINIMIZE2TRAY_VERSION` in CMake or pass `-DMINIMIZE2TRAY_VERSION=1.2.3`. Ot
 Enable **Minimize to Tray** in **System Settings → Window Management → KWin Scripts**. The default shortcut is **Meta+Alt+PgDown**, configurable under **Keyboard → Shortcuts → KWin**.
 
 Open **Configure…** from a tray menu, then use **Add rule → Detect window properties**. Match an application, class, instance, role or title. Matching is case-sensitive: selected conditions use AND; enabled rules use OR. Use role/title conditions to distinguish separate windows of one app. Changes take effect with **Apply/OK**; Cancel discards edits.
+
+Rules default to title order; **Sort by** also offers creation time. Older rules have unknown creation dates and follow dated rules in their stored order.
 
 Each rule offers:
 

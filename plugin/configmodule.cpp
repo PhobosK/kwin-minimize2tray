@@ -11,6 +11,8 @@
 #include <QCheckBox>
 #include <QClipboard>
 #include <QComboBox>
+#include <QCollator>
+#include <QGuiApplication>
 #include <QDBusArgument>
 #include <QDBusConnection>
 #include <QDBusMessage>
@@ -20,6 +22,7 @@
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QFileDialog>
+#include <QEventLoopLocker>
 #include <QFontDatabase>
 #include <QFormLayout>
 #include <QGridLayout>
@@ -49,6 +52,7 @@
 #include <QTreeWidget>
 #include <QVBoxLayout>
 #include <algorithm>
+#include <memory>
 
 using namespace Minimize2Tray;
 
@@ -222,6 +226,41 @@ class RuleModel : public QAbstractListModel {
         rules.removeAt(at);
         endRemoveRows();
     }
+};
+
+// Sort the view only. Stored rule order and matching semantics stay independent.
+class RuleProxy : public QSortFilterProxyModel {
+  public:
+    explicit RuleProxy(QObject *parent) : QSortFilterProxyModel(parent) {
+        m_collator.setCaseSensitivity(Qt::CaseInsensitive);
+        m_collator.setNumericMode(true);
+        sort(0);
+    }
+    void setOrder(const QString &order) {
+        m_order = order;
+        invalidate();
+    }
+  protected:
+    bool lessThan(const QModelIndex &left, const QModelIndex &right) const override {
+        const auto a = left.data(RuleModel::RuleRole).toMap();
+        const auto b = right.data(RuleModel::RuleRole).toMap();
+        if (m_order != QLatin1String("title")) {
+            const auto ad = a.value(QStringLiteral("createdAt")).toString();
+            const auto bd = b.value(QStringLiteral("createdAt")).toString();
+            if (ad.isEmpty() != bd.isEmpty())
+                return !ad.isEmpty(); // Unknown dates always follow known dates.
+            if (ad.isEmpty())
+                return left.row() < right.row(); // Preserve older rules' stored order.
+            if (ad != bd)
+                return m_order == QLatin1String("oldest") ? ad < bd : ad > bd;
+        }
+        const int title = m_collator.compare(a.value(QStringLiteral("title")).toString(),
+                                            b.value(QStringLiteral("title")).toString());
+        return title ? title < 0 : a.value(QStringLiteral("id")).toString() < b.value(QStringLiteral("id")).toString();
+    }
+  private:
+    QCollator m_collator;
+    QString m_order = QStringLiteral("title");
 };
 
 class RuleDelegate : public QStyledItemDelegate {
@@ -843,6 +882,7 @@ class RuleDialog : public QDialog {
 
 class Minimize2TrayConfig : public KCModule {
     Q_OBJECT
+    Q_CLASSINFO("D-Bus Interface", "com.github.luisbocanegra.Minimize2Tray.Configuration")
   public:
     Minimize2TrayConfig(QObject *parent, const KPluginMetaData &data)
         : KCModule(parent, data), m_config(QStringLiteral("kwinrc")) {
@@ -884,12 +924,22 @@ class Minimize2TrayConfig : public KCModule {
         toolbar->addWidget(add);
         toolbar->addWidget(text);
         toolbar->addStretch();
+        auto sortLabel = new QLabel(tr("Sort by:"));
+        m_sort = new QComboBox;
+        m_sort->setObjectName(QStringLiteral("ruleSort"));
+        m_sort->addItem(tr("Title (A–Z)"), QStringLiteral("title"));
+        m_sort->addItem(tr("Created (newest first)"), QStringLiteral("newest"));
+        m_sort->addItem(tr("Created (oldest first)"), QStringLiteral("oldest"));
+        m_sort->setToolTip(tr("Older rules have no recorded creation time and follow dated rules in their stored order."));
+        sortLabel->setBuddy(m_sort);
+        toolbar->addWidget(sortLabel);
+        toolbar->addWidget(m_sort);
         m_count = plainLabel(QString());
         m_count->setWordWrap(false);
         toolbar->addWidget(m_count);
         rulesLayout->addLayout(toolbar);
         m_model = new RuleModel(this);
-        m_proxy = new QSortFilterProxyModel(this);
+        m_proxy = new RuleProxy(this);
         m_proxy->setSourceModel(m_model);
         m_proxy->setFilterRole(RuleModel::SearchRole);
         m_proxy->setFilterCaseSensitivity(Qt::CaseInsensitive);
@@ -1000,9 +1050,18 @@ class Minimize2TrayConfig : public KCModule {
                 if (!m_uiHidden)
                     m_savedScroll = value;
             }));
+        connect(m_sort, &QComboBox::currentIndexChanged, this, [this]() {
+            const auto selected = selectedId();
+            m_savedSort = m_sort->currentData().toString();
+            m_proxy->setOrder(m_savedSort);
+            const int at = m_model->find(selected);
+            if (at >= 0)
+                m_list->setCurrentIndex(m_proxy->mapFromSource(m_model->index(at)));
+        });
         widget()->installEventFilter(this);
-        load();
         const auto state = uiState(QStringLiteral("page"));
+        m_sort->setCurrentIndex(std::max(0, m_sort->findData(state.readEntry("sort", QStringLiteral("title")))));
+        load();
         m_search->setText(state.readEntry("search", QString()));
         m_tabs->setCurrentIndex(std::clamp(state.readEntry("tab", 0), 0, 2));
         QTimer::singleShot(0, this,
@@ -1010,11 +1069,27 @@ class Minimize2TrayConfig : public KCModule {
         const int at = m_model->find(state.readEntry("selection", QString()));
         if (at >= 0)
             m_list->setCurrentIndex(m_proxy->mapFromSource(m_model->index(at)));
+        // Configuration launched outside KWin is an ordinary managed window.
+        // Repeated tray requests reuse it, even while there are no tray items.
+        auto bus = QDBusConnection::sessionBus();
+        if (QGuiApplication::platformName() != QLatin1String("org.kde.kwin.qpa") &&
+            bus.registerObject(QStringLiteral("/Minimize2Tray/Configuration"), this,
+                               QDBusConnection::ExportScriptableSlots)) {
+            m_activationRegistered = bus.registerService(QString::fromLatin1(ConfigService));
+            if (!m_activationRegistered)
+                bus.unregisterObject(QStringLiteral("/Minimize2Tray/Configuration"));
+        }
     }
     ~Minimize2TrayConfig() override {
+        if (m_activationRegistered) {
+            auto bus = QDBusConnection::sessionBus();
+            bus.unregisterService(QString::fromLatin1(ConfigService));
+            bus.unregisterObject(QStringLiteral("/Minimize2Tray/Configuration"));
+        }
         for (const auto &connection : m_stateConnections)
             disconnect(connection);
         auto state = uiState(QStringLiteral("page"));
+        state.writeEntry("sort", m_savedSort);
         state.writeEntry("search", m_savedSearch);
         state.writeEntry("tab", m_savedTab);
         state.writeEntry("selection", m_savedSelection);
@@ -1086,7 +1161,8 @@ class Minimize2TrayConfig : public KCModule {
             QJsonDocument::fromJson(previousRules.toUtf8()).object().value(QStringLiteral("schemaVersion"));
         const QString backupKey = previousSchema == QJsonValue(1) ? QStringLiteral("rulesSchema1Backup")
                                   : previousSchema == QJsonValue(2) ? QStringLiteral("rulesSchema2Backup")
-                                  : previousSchema == QJsonValue(3) ? QStringLiteral("rulesSchema3Backup") : QString();
+                                  : previousSchema == QJsonValue(3) ? QStringLiteral("rulesSchema3Backup")
+                                  : previousSchema == QJsonValue(4) ? QStringLiteral("rulesSchema4Backup") : QString();
         if (!backupKey.isEmpty() && !group.hasKey(backupKey)) {
             if (group.isEntryImmutable(backupKey)) {
                 saveError(tr("The rule migration backup is locked by the system administrator."));
@@ -1120,6 +1196,16 @@ class Minimize2TrayConfig : public KCModule {
         m_debug->setChecked(false);
         m_loading = false;
         changed();
+    }
+
+  public slots:
+    Q_SCRIPTABLE void activate() {
+        auto host = widget()->window();
+        if (host->isMinimized())
+            host->setWindowState(host->windowState() & ~Qt::WindowMinimized);
+        host->show();
+        host->raise();
+        host->activateWindow();
     }
 
   private slots:
@@ -1233,9 +1319,14 @@ class Minimize2TrayConfig : public KCModule {
             return;
         host->setProperty("minimize2traySaveGuard", true);
         const bool deleteOnClose = host->testAttribute(Qt::WA_DeleteOnClose);
+        // kcmshell6 normally quits when its last window closes. Keep its event
+        // loop alive until the deferred save check can reopen a failed save.
+        const bool ownHost = QCoreApplication::applicationName() == QLatin1String("kcmshell6");
+        const auto quitLocker = ownHost && deleteOnClose && QApplication::quitOnLastWindowClosed()
+                                    ? std::make_shared<QEventLoopLocker>() : nullptr;
         host->setAttribute(Qt::WA_DeleteOnClose, false);
         // KDE hosts can accept before and after save(); decide after both signals settle.
-        connect(host, &QDialog::accepted, host, [host, deleteOnClose]() {
+        connect(host, &QDialog::accepted, host, [host, deleteOnClose, quitLocker]() {
             if (host->property("minimize2traySaveCheck").toBool())
                 return;
             host->setProperty("minimize2traySaveCheck", true);
@@ -1273,7 +1364,8 @@ class Minimize2TrayConfig : public KCModule {
     }
     KConfig m_config;
     RuleModel *m_model;
-    QSortFilterProxyModel *m_proxy;
+    RuleProxy *m_proxy;
+    QComboBox *m_sort;
     QListView *m_list;
     QLineEdit *m_search;
     QTabWidget *m_tabs;
@@ -1292,6 +1384,8 @@ class Minimize2TrayConfig : public KCModule {
     bool m_loading = false;
     bool m_uiHidden = false;
     QList<QMetaObject::Connection> m_stateConnections;
+    bool m_activationRegistered = false;
+    QString m_savedSort = QStringLiteral("title");
     QString m_savedSearch;
     QString m_savedSelection;
     int m_savedTab = 0;

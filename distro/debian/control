@@ -23,6 +23,7 @@ Depends: ${misc:Depends},
          ${shlibs:Depends},
          kwin-common (>= 4:6.0.0~),
          plasma-workspace (>= 4:6.0.0~),
+         libkf6kcmutils-bin (>= 6.0.0~),
          qml6-module-qtquick
 Description: minimize windows to the system tray in KDE Plasma 6
  KWin script with a native tray plugin and configuration module, providing
