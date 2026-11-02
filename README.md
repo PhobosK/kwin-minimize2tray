@@ -11,13 +11,14 @@ Hide windows to the system tray, similar to [KDocker](https://github.com/user-no
 ![preview](screenshots/preview.png)
 ![config](screenshots/config-workflow.png)
 
-Some Chromium/Electron applications need native Wayland mode for reliable hiding. Check their window type in KWin Debug Console and see the [Wayland notes](https://wiki.archlinux.org/title/Wayland#GUI_libraries).
+> [!IMPORTANT]
+> Some Chromium/Electron applications need native Wayland mode for reliable hiding. Check their window type in KWin Debug Console and see the [Wayland notes](https://wiki.archlinux.org/title/Wayland#GUI_libraries).
 
 
 ## Features
 
 - Minimize windows to tray and restore them without changing monitor, geometry, desktop or activity memberships. Showing a window switches to its assigned desktop/activity.
-- Searchable per-window rules, sorted by title or creation time, with KWin detection, matching previews and JSON export. Apply/OK updates running windows immediately.
+- Searchable per-window rules, sorted by title or creation time, with KWin detection, matching previews and configuration backup/restore. Apply/OK updates running windows immediately.
 - Independent startup and minimize actions, plus close-to-tray through an optional shortcut. Child windows, modal dialogs and system/configuration windows are protected by default.
 - Desktop-file icons, application-provided [Unity LauncherAPI](https://wiki.ubuntu.com/Unity/LauncherAPI) counters/progress/urgency, and per-window attention. Counts are shared between an app's windows; notifications are not unread counters.
 - About and configuration access from tray menus. Plasma currently does not display the action tooltips.
@@ -117,7 +118,7 @@ Overlapping rules combine actions: Start in tray wins over pin-only; Minimize On
 
 **Show** prevents startup re-hiding; later minimize/close actions can hide again. **Unpin** suppresses automatic actions until the window stops matching all rules or is manually pinned again. Removing the last matching rule restores automatic tray-hidden windows; manual pins remain independent. Tray Quit closes only its associated window.
 
-Existing settings migrate with backups on Apply; startup retry defaults Off. Invalid rules are reported and retained. **View as text** exports read-only JSON.
+Existing settings migrate with backups on Apply; startup retry defaults Off. Invalid rules are reported and retained. **View as text** shows read-only rule JSON and offers **Export configuration…**. Export backs up all rules, options and sorting, including pending edits, to a JSON file. **Import configuration…** lets you choose rules, options or both. Add rules to the current list or replace it; identical copies are skipped when adding. Imported options replace current options and sorting; unselected items stay unchanged. Choose Apply/OK to save, or Cancel to discard. Global shortcut assignments and unrelated KWin settings are not included.
 
 ## Acknowledgements
 

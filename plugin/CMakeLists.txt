@@ -21,7 +21,7 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE
 install(TARGETS ${PLUGIN_NAME} DESTINATION ${KDE_INSTALL_QMLDIR}/com/github/luisbocanegra/${LIB_NAME})
 install(FILES qmldir DESTINATION ${KDE_INSTALL_QMLDIR}/com/github/luisbocanegra/${LIB_NAME})
 
-add_library(kcm_minimize2tray MODULE configmodule.cpp rules.cpp)
+add_library(kcm_minimize2tray MODULE configmodule.cpp rules.cpp configbackup.cpp)
 set_target_properties(kcm_minimize2tray PROPERTIES PREFIX "")
 target_link_libraries(kcm_minimize2tray PRIVATE
     Qt6::Widgets Qt6::DBus KF6::KCMUtils KF6::ConfigCore KF6::CoreAddons KF6::Service

@@ -1,3 +1,4 @@
+#include "configbackup.h"
 #include "rules.h"
 
 #include <KCModule>
@@ -45,6 +46,7 @@
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSet>
+#include <QSignalBlocker>
 #include <QSortFilterProxyModel>
 #include <QSpinBox>
 #include <QStyleOptionButton>
@@ -1050,7 +1052,20 @@ class Minimize2TrayConfig : public KCModule {
                                                 "and system surfaces are protected from hiding.")));
         advancedLayout->addStretch();
         m_tabs->addTab(advancedPage, QIcon::fromTheme(QStringLiteral("configure")), tr("Advanced"));
+        auto backupActions = new QHBoxLayout;
+        auto import = makeButton(tr("Import configuration…"), QStringLiteral("document-import"));
+        import->setObjectName(QStringLiteral("importConfiguration"));
+        import->setToolTip(tr("Choose rules, options or both from a Minimize2Tray backup. Review before Apply or OK."));
+        auto exportConfig = makeButton(tr("Export configuration…"), QStringLiteral("document-export"));
+        exportConfig->setObjectName(QStringLiteral("exportConfiguration"));
+        exportConfig->setToolTip(tr("Back up all rules, options and sorting, including pending edits."));
+        backupActions->addWidget(import);
+        backupActions->addWidget(exportConfig);
+        backupActions->addStretch();
+        outer->addLayout(backupActions);
         outer->addWidget(plainLabel(tr("Changes take effect after Apply or OK.")));
+        connect(import, &QPushButton::clicked, this, &Minimize2TrayConfig::importConfiguration);
+        connect(exportConfig, &QPushButton::clicked, this, [this]() { exportConfiguration(widget(), m_error); });
         connect(add, &QPushButton::clicked, this, &Minimize2TrayConfig::addRule);
         connect(text, &QPushButton::clicked, this, &Minimize2TrayConfig::showText);
         connect(m_search, &QLineEdit::textChanged, m_proxy, &QSortFilterProxyModel::setFilterFixedString);
@@ -1109,6 +1124,8 @@ class Minimize2TrayConfig : public KCModule {
             }));
         connect(m_sort, &QComboBox::currentIndexChanged, this, [this]() {
             const auto selected = selectedId();
+            const bool imported = !m_pendingSort.isEmpty();
+            m_pendingSort.clear();
             const auto order = m_sort->currentData().toString();
             m_proxy->setOrder(order);
             // Persist this view preference immediately, independently of Apply/Cancel
@@ -1119,6 +1136,8 @@ class Minimize2TrayConfig : public KCModule {
             const int at = m_model->find(selected);
             if (at >= 0)
                 m_list->setCurrentIndex(m_proxy->mapFromSource(m_model->index(at)));
+            if (imported)
+                changed();
         });
         widget()->installEventFilter(this);
         const auto state = uiState(QStringLiteral("page"));
@@ -1160,6 +1179,7 @@ class Minimize2TrayConfig : public KCModule {
 
     void load() override {
         m_loading = true;
+        m_pendingSort.clear();
         const QString previousSelection =
             selectedId().isEmpty() ? uiState(QStringLiteral("page")).readEntry("selection", QString()) : selectedId();
         m_config.reparseConfiguration();
@@ -1217,13 +1237,19 @@ class Minimize2TrayConfig : public KCModule {
                 return;
             }
         }
+        auto viewState = group.group(QStringLiteral("Ui")).group(QStringLiteral("page"));
+        if (!m_pendingSort.isEmpty() && viewState.isEntryImmutable("sort")) {
+            saveError(tr("The sorting preference is locked by the system administrator."));
+            return;
+        }
         const QString previousRules = current.value(QStringLiteral("rules")).toString();
         const auto previousSchema =
             QJsonDocument::fromJson(previousRules.toUtf8()).object().value(QStringLiteral("schemaVersion"));
-        const QString backupKey = previousSchema == QJsonValue(1) ? QStringLiteral("rulesSchema1Backup")
+        const QString backupKey = previousSchema == QJsonValue(1)   ? QStringLiteral("rulesSchema1Backup")
                                   : previousSchema == QJsonValue(2) ? QStringLiteral("rulesSchema2Backup")
                                   : previousSchema == QJsonValue(3) ? QStringLiteral("rulesSchema3Backup")
-                                  : previousSchema == QJsonValue(4) ? QStringLiteral("rulesSchema4Backup") : QString();
+                                  : previousSchema == QJsonValue(4) ? QStringLiteral("rulesSchema4Backup")
+                                                                    : QString();
         if (!backupKey.isEmpty() && !group.hasKey(backupKey)) {
             if (group.isEntryImmutable(backupKey)) {
                 saveError(tr("The rule migration backup is locked by the system administrator."));
@@ -1236,14 +1262,30 @@ class Minimize2TrayConfig : public KCModule {
         group.writeEntry("countDisplayLimit", m_limit->value());
         group.writeEntry("hideOnMinimize", m_hide->isChecked());
         group.writeEntry("debugEnabled", m_debug->isChecked());
+        if (!m_pendingSort.isEmpty())
+            viewState.writeEntry("sort", m_pendingSort);
         if (!m_config.sync()) {
             m_config.markAsClean();
             saveError(tr("Saving failed. Your pending changes are still available; check that kwinrc is writable."));
             return;
         }
+        const auto importedSort = m_pendingSort;
+        if (!importedSort.isEmpty())
+            KSharedConfig::openConfig(QStringLiteral("kwinrc"))->reparseConfiguration();
         load();
+        if (!importedSort.isEmpty()) {
+            // Already persisted with the rules and options in the same sync.
+            const QSignalBlocker blocker(m_sort);
+            m_sort->setCurrentIndex(m_sort->findData(importedSort));
+            const auto selected = selectedId();
+            m_proxy->setOrder(importedSort);
+            const int at = m_model->find(selected);
+            if (at >= 0)
+                m_list->setCurrentIndex(m_proxy->mapFromSource(m_model->index(at)));
+        }
     }
     void defaults() override {
+        m_pendingSort.clear();
         m_deleted.clear();
         m_undo->hide();
         m_reload->hide();
@@ -1270,6 +1312,101 @@ class Minimize2TrayConfig : public KCModule {
     }
 
   private slots:
+    void importConfiguration() {
+        if (!m_loadError.isEmpty()) {
+            setMessage(m_error,
+                       tr("Resolve the stored rule error before importing. View as text can save a recovery copy."));
+            return;
+        }
+        const auto path = QFileDialog::getOpenFileName(widget(), tr("Import Minimize2Tray configuration"), QString(),
+                                                       tr("Minimize2Tray configuration (*.json)"));
+        if (path.isEmpty())
+            return;
+        ConfigurationBackup backup;
+        QString error;
+        if (!readConfigurationBackup(path, backup, error)) {
+            setMessage(m_error, error);
+            return;
+        }
+        auto dialog = new QDialog(widget());
+        dialog->setObjectName(QStringLiteral("confirmConfigurationImport"));
+        dialog->setWindowTitle(tr("Import configuration — Minimize to Tray"));
+        dialog->setMinimumWidth(480);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->setWindowModality(Qt::WindowModal);
+        auto layout = new QVBoxLayout(dialog);
+        layout->addWidget(plainLabel(
+            tr("Backup rules: %1 · Current rules: %2").arg(backup.rules.size()).arg(m_model->rowCount())));
+        auto rules = new QCheckBox(tr("Import window rules"));
+        rules->setObjectName(QStringLiteral("importRules"));
+        rules->setChecked(true);
+        layout->addWidget(rules);
+        auto mode = new QComboBox;
+        mode->setObjectName(QStringLiteral("importRuleMode"));
+        mode->addItem(tr("Add to current rules"));
+        mode->addItem(tr("Replace current rules"));
+        auto form = new QFormLayout;
+        form->addRow(tr("Rules:"), mode);
+        layout->addLayout(form);
+        auto duplicates = plainLabel(tr("Adding keeps current rules and skips identical copies. Changed versions "
+                                        "are added separately."));
+        layout->addWidget(duplicates);
+        auto options = new QCheckBox(tr("Import application options (including sorting)"));
+        options->setObjectName(QStringLiteral("importOptions"));
+        layout->addWidget(options);
+        layout->addWidget(plainLabel(tr("Selected options replace current options. Unselected items keep their current "
+                                        "values, including pending edits. Global shortcuts are not included.")));
+        layout->addWidget(plainLabel(tr("Review after importing. Apply or OK saves; Cancel in the configuration "
+                                        "window discards the import.")));
+        auto errorLabel = plainLabel(QString());
+        errorLabel->setObjectName(QStringLiteral("importError"));
+        layout->addWidget(errorLabel);
+        auto buttons = new QDialogButtonBox(QDialogButtonBox::Cancel);
+        auto import = buttons->addButton(tr("Import"), QDialogButtonBox::ActionRole);
+        import->setObjectName(QStringLiteral("applyConfigurationImport"));
+        import->setAutoDefault(false);
+        buttons->button(QDialogButtonBox::Cancel)->setDefault(true);
+        layout->addWidget(buttons);
+        connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
+        auto update = [rules, options, mode, duplicates, import]() {
+            mode->setEnabled(rules->isChecked());
+            duplicates->setVisible(rules->isChecked() && mode->currentIndex() == 0);
+            import->setEnabled(rules->isChecked() || options->isChecked());
+        };
+        connect(rules, &QCheckBox::toggled, dialog, update);
+        connect(options, &QCheckBox::toggled, dialog, update);
+        connect(mode, &QComboBox::currentIndexChanged, dialog, update);
+        update();
+        connect(import, &QPushButton::clicked, dialog, [this, dialog, rules, options, mode, errorLabel, backup]() {
+            auto importedRules = backup.rules;
+            if (rules->isChecked() && mode->currentIndex() == 0) {
+                QString error;
+                if (!mergeConfigurationRules(m_model->rules, backup.rules, importedRules, error)) {
+                    setMessage(errorLabel, error);
+                    return;
+                }
+            }
+            m_loading = true;
+            if (rules->isChecked()) {
+                m_model->reset(importedRules);
+                m_deleted.clear();
+                m_undo->hide();
+            }
+            if (options->isChecked()) {
+                m_dot->setChecked(backup.settings.value(QStringLiteral("countUseDot")).toBool());
+                m_limit->setValue(backup.settings.value(QStringLiteral("countDisplayLimit")).toInt());
+                m_hide->setChecked(backup.settings.value(QStringLiteral("hideOnMinimize")).toBool());
+                m_debug->setChecked(backup.settings.value(QStringLiteral("debugEnabled")).toBool());
+                // Keep imported sorting pending until Apply, just like other options.
+                m_pendingSort = backup.sortOrder;
+            }
+            m_loading = false;
+            changed();
+            setMessage(m_error, tr("Selected items imported for review. Apply or OK saves the changes."));
+            dialog->accept();
+        });
+        dialog->open();
+    }
     void addRule() {
         if (m_model->rowCount() >= MaxRules) {
             setMessage(m_error, tr("The maximum of 1024 rules has been reached."));
@@ -1295,7 +1432,8 @@ class Minimize2TrayConfig : public KCModule {
             return;
         auto values = readSettingsFromWidgets();
         values.insert(QStringLiteral("rules"), encodeRules(m_model->rules));
-        setNeedsSave(values != m_loaded);
+        setNeedsSave(values != m_loaded ||
+                     (!m_pendingSort.isEmpty() && m_pendingSort != m_sort->currentData().toString()));
         updateCounts();
     }
     void updateCounts() {
@@ -1336,6 +1474,11 @@ class Minimize2TrayConfig : public KCModule {
         auto buttons = new QDialogButtonBox(QDialogButtonBox::Close);
         auto copy = buttons->addButton(tr("Copy all"), QDialogButtonBox::ActionRole);
         auto save = buttons->addButton(tr("Save a copy…"), QDialogButtonBox::ActionRole);
+        auto exportConfig = buttons->addButton(tr("Export configuration…"), QDialogButtonBox::ActionRole);
+        exportConfig->setObjectName(QStringLiteral("exportTextConfiguration"));
+        exportConfig->setToolTip(tr("Back up these rules together with all options and sorting."));
+        connect(exportConfig, &QPushButton::clicked, dialog,
+                [this, dialog, error]() { exportConfiguration(dialog, error); });
         layout->addWidget(buttons);
         connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
         connect(copy, &QPushButton::clicked, dialog,
@@ -1374,6 +1517,31 @@ class Minimize2TrayConfig : public KCModule {
     }
 
   private:
+    void exportConfiguration(QWidget *parent, QLabel *message) {
+        if (!m_loadError.isEmpty()) {
+            setMessage(message, tr("The stored rules are invalid. Use Save a copy in View as text for recovery."));
+            return;
+        }
+        QString error;
+        const auto json =
+            encodeConfigurationBackup({m_model->rules, readSettingsFromWidgets(),
+                                       m_pendingSort.isEmpty() ? m_sort->currentData().toString() : m_pendingSort},
+                                      error);
+        if (json.isEmpty()) {
+            setMessage(message, error);
+            return;
+        }
+        const auto path = QFileDialog::getSaveFileName(parent, tr("Export Minimize2Tray configuration"),
+                                                       QStringLiteral("minimize2tray-config.json"),
+                                                       tr("Minimize2Tray configuration (*.json)"));
+        if (path.isEmpty())
+            return;
+        if (!writeConfigurationBackup(path, json, error))
+            setMessage(message, error);
+        else
+            setMessage(message,
+                       tr("Configuration exported, including pending edits. Global shortcuts are not included."));
+    }
     void saveError(const QString &message) { setMessage(m_error, message); }
     void guardDialog(QDialog *host) {
         if (!host || host->property("minimize2traySaveGuard").toBool())
@@ -1441,6 +1609,7 @@ class Minimize2TrayConfig : public KCModule {
     QCheckBox *m_debug;
     QVariantMap m_loaded;
     QString m_loadError;
+    QString m_pendingSort;
     QList<QPair<int, QVariantMap>> m_deleted;
     bool m_loading = false;
     bool m_uiHidden = false;
