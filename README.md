@@ -9,10 +9,10 @@ This fork builds on the original work with reliability fixes, easier configurati
 Hide windows to the system tray, similar to [KDocker](https://github.com/user-none/KDocker) but in the form of a KWin Script that works on KDE Plasma 6.0+ Wayland.
 
 ![preview](screenshots/preview.png)
+![config](screenshots/config-workflow.png)
 
 Some Chromium/Electron applications need native Wayland mode for reliable hiding. Check their window type in KWin Debug Console and see the [Wayland notes](https://wiki.archlinux.org/title/Wayland#GUI_libraries).
 
-![wayland](screenshots/wayland.png)
 
 ## Features
 
