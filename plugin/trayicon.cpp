@@ -101,6 +101,9 @@ class LauncherAPI : public QObject {
                                               QStringLiteral("Update"), this,
                                               SLOT(update(QString, QVariantMap, QDBusMessage)));
         connect(&m_watcher, &QDBusServiceWatcher::serviceUnregistered, this, &LauncherAPI::resetSource);
+        // Application filters see every event in KWin, regardless of its receiver.
+        // Share one filter instead of adding another for each managed window.
+        qGuiApp->installEventFilter(this);
     }
 
     QVariantMap watch(const QString &url) {
@@ -123,6 +126,7 @@ class LauncherAPI : public QObject {
 
   signals:
     void updated(const QString &url);
+    void appearanceChanged();
 
   private slots:
     void update(const QString &uri, const QVariantMap &properties, const QDBusMessage &message) {
@@ -135,6 +139,7 @@ class LauncherAPI : public QObject {
         if (values.isEmpty()) {
             return;
         }
+        const auto previousProperties = entry->properties;
         const QString previousSender = entry->sender;
         if (previousSender != message.service()) {
             // A new publisher must not inherit the previous publisher's fields.
@@ -154,7 +159,16 @@ class LauncherAPI : public QObject {
                 m_watcher.removeWatchedService(previousSender);
             }
         }
-        emit updated(url);
+        if (entry->properties != previousProperties)
+            emit updated(url);
+    }
+
+  protected:
+    bool eventFilter(QObject *watched, QEvent *event) override {
+        if (watched == qGuiApp && (event->type() == QEvent::ApplicationPaletteChange ||
+                                   event->type() == QEvent::ApplicationFontChange))
+            emit appearanceChanged();
+        return QObject::eventFilter(watched, event);
     }
 
   private:
@@ -172,15 +186,23 @@ class LauncherAPI : public QObject {
         }
         m_watcher.addWatchedService(sender);
         // Close the race where the publisher exits before the watch is installed.
-        auto *call = new QDBusPendingCallWatcher(
-            QDBusConnection::sessionBus().interface()->asyncCall(QStringLiteral("GetNameOwner"), sender), this);
-        connect(call, &QDBusPendingCallWatcher::finished, this, [this, call, sender]() {
+        const auto interface = QDBusConnection::sessionBus().interface();
+        if (!interface) {
+            QTimer::singleShot(0, this, [this, sender]() { resetSource(sender); });
+            return;
+        }
+        auto *call = new QDBusPendingCallWatcher(interface->asyncCall(QStringLiteral("GetNameOwner"), sender), this);
+        const auto finished = [this, call, sender]() {
             const QDBusPendingReply<QString> reply = *call;
             if (reply.isError()) {
                 resetSource(sender);
             }
             call->deleteLater();
-        });
+        };
+        if (call->isFinished())
+            QTimer::singleShot(0, this, finished);
+        else
+            connect(call, &QDBusPendingCallWatcher::finished, this, finished);
     }
 
     void resetSource(const QString &sender) {
@@ -212,20 +234,20 @@ TrayIcon::TrayIcon(QObject *parent) : QObject(parent), m_launcherAPI(LauncherAPI
             launcherAPIUpdate(url, m_launcherAPI->properties(url));
         }
     });
-    qGuiApp->installEventFilter(this);
-    connect(this, &TrayIcon::xdgNameChanged, this, &TrayIcon::updateApplication);
+    connect(m_launcherAPI.data(), &LauncherAPI::appearanceChanged, this, &TrayIcon::scheduleBadgeUpdate);
+    connect(this, &TrayIcon::xdgNameChanged, this, &TrayIcon::scheduleApplicationUpdate);
     // Queue cache refreshes to avoid re-entering KService lookups.
-    connect(KSycoca::self(), &KSycoca::databaseChanged, this, &TrayIcon::updateApplication, Qt::QueuedConnection);
+    connect(KSycoca::self(), &KSycoca::databaseChanged, this, &TrayIcon::scheduleApplicationUpdate);
     // Wait until QML has assigned all initial window properties.
     QTimer::singleShot(0, this, [this]() {
         initializeTrayIcon();
-        updateApplication();
+        scheduleApplicationUpdate();
     });
 }
 
 TrayIcon::~TrayIcon() { m_launcherAPI->unwatch(m_launcherUrl); }
 
-void TrayIcon::setIcon(const QIcon newIcon) {
+void TrayIcon::setIcon(const QIcon &newIcon) {
     if (m_icon.cacheKey() != newIcon.cacheKey()) {
         m_icon = newIcon;
         emit iconChanged();
@@ -233,7 +255,7 @@ void TrayIcon::setIcon(const QIcon newIcon) {
 }
 
 void TrayIcon::setWindowId(const QUuid window) { m_windowId = window; }
-void TrayIcon::setToolTipText(const QString toolTipText) {
+void TrayIcon::setToolTipText(const QString &toolTipText) {
     if (m_toolTipText != toolTipText) {
         m_toolTipText = toolTipText;
         emit toolTipTextChanged();
@@ -333,13 +355,11 @@ void TrayIcon::setUrgent(bool urgent) {
     }
 }
 
-void TrayIcon::setXdgName(const QString id) {
+void TrayIcon::setXdgName(const QString &id) {
     if (id != m_xdgName) {
         m_xdgName = id;
-        // Keep early updates while tray creation and desktop lookup are deferred.
-        if (!trayIcon) {
-            setLauncherUrl(QFileInfo(id).fileName());
-        }
+        // Change badge ownership immediately; defer only installed metadata/icon work.
+        setLauncherUrl(QFileInfo(id).fileName());
         emit xdgNameChanged();
     }
 }
@@ -349,7 +369,6 @@ void TrayIcon::initializeTrayIcon() {
         return;
     }
 
-    qDebug() << "New Tray Icon" << m_xdgName;
     trayIcon = new KStatusNotifierItem(m_xdgName.isEmpty() ? m_windowId.toString() : m_xdgName, this);
     // Own Quit to provide a tooltip and keep it scoped to this window.
     trayIcon->setStandardActionsEnabled(false);
@@ -357,13 +376,13 @@ void TrayIcon::initializeTrayIcon() {
     m_menu->setToolTipsVisible(true);
 
     QAction *showAction = new QAction("Show/Hide", m_menu);
-    connect(showAction, &QAction::triggered, this, [this]() { emit requestShowHide(m_windowId); });
+    connect(showAction, &QAction::triggered, this, [this]() { emit requestShowHide(m_windowId); }, Qt::QueuedConnection);
     showAction->setToolTip(tr("Show or hide this window on its assigned activity and virtual desktop."));
     showAction->setIcon(QIcon::fromTheme(QStringLiteral("view-visible-symbolic")));
     m_menu->addAction(showAction);
 
     QAction *unpinAction = new QAction("Unpin", m_menu);
-    connect(unpinAction, &QAction::triggered, this, [this]() { emit requestUnpin(m_windowId); });
+    connect(unpinAction, &QAction::triggered, this, [this]() { emit requestUnpin(m_windowId); }, Qt::QueuedConnection);
     unpinAction->setToolTip(tr("Show this window and remove its tray icon."));
     unpinAction->setIcon(QIcon::fromTheme(QStringLiteral("window-unpin-symbolic")));
     m_menu->addAction(unpinAction);
@@ -372,24 +391,30 @@ void TrayIcon::initializeTrayIcon() {
     auto aboutAction = m_menu->addAction(QIcon::fromTheme(QStringLiteral("help-about")), tr("About"));
     aboutAction->setIconVisibleInMenu(true);
     aboutAction->setToolTip(tr("About Minimize2Tray: version, authors, license and project website."));
-    connect(aboutAction, &QAction::triggered, this, &TrayIcon::requestAbout);
+    connect(aboutAction, &QAction::triggered, this, &TrayIcon::requestAbout, Qt::QueuedConnection);
     auto configureAction = m_menu->addAction(QIcon::fromTheme(QStringLiteral("configure")), tr("Configure…"));
     configureAction->setIconVisibleInMenu(true);
     configureAction->setToolTip(tr("Configure Minimize2Tray settings and window rules for all applications."));
-    connect(configureAction, &QAction::triggered, this, &TrayIcon::requestConfigure);
+    connect(configureAction, &QAction::triggered, this, &TrayIcon::requestConfigure, Qt::QueuedConnection);
 
     m_menu->addSeparator();
     auto quitAction = m_menu->addAction(QIcon::fromTheme(QStringLiteral("application-exit")), tr("Quit"));
     quitAction->setToolTip(tr("Close this window. Other windows of the application may remain open."));
-    connect(quitAction, &QAction::triggered, this, [this]() { emit requestClose(m_windowId); });
+    connect(quitAction, &QAction::triggered, this, [this]() { emit requestClose(m_windowId); }, Qt::QueuedConnection);
 
     connect(trayIcon, &KStatusNotifierItem::quitRequested, this, [this]() {
-        emit requestClose(m_windowId);
-        // wants to kill KWin otherwise
+        // Abort synchronously: the framework otherwise quits the host after this signal.
         trayIcon->abortQuit();
+        QTimer::singleShot(0, this, [this]() { emit requestClose(m_windowId); });
     });
 
-    connect(trayIcon, &KStatusNotifierItem::activateRequested, this, [this]() { emit requestShowHide(m_windowId); });
+    // Return from the tray D-Bus method before touching compositor window state.
+    connect(trayIcon, &KStatusNotifierItem::activateRequested, this,
+            [this]() {
+                // activate() clears framework attention; the actual sources still own it.
+                updateStatus();
+                emit requestShowHide(m_windowId);
+            }, Qt::QueuedConnection);
 
     connect(this, &TrayIcon::toolTipTextChanged, this, [this]() { trayIcon->setToolTipTitle(m_toolTipText); });
 
@@ -410,6 +435,15 @@ void TrayIcon::initializeTrayIcon() {
     trayIcon->setToolTipSubTitle(m_xdgName);
     trayIcon->setTitle(m_appName);
     updateStatus();
+}
+
+void TrayIcon::scheduleApplicationUpdate() {
+    if (m_applicationUpdatePending) return;
+    m_applicationUpdatePending = true;
+    QTimer::singleShot(0, this, [this]() {
+        m_applicationUpdatePending = false;
+        updateApplication();
+    });
 }
 
 void TrayIcon::updateApplication() {
@@ -460,16 +494,9 @@ void TrayIcon::scheduleBadgeUpdate() {
     m_badgeUpdatePending = true;
     QTimer::singleShot(0, this, [this]() {
         m_badgeUpdatePending = false;
-        updateBadges();
+        // The pending identity lookup will queue the paint with its resolved icon.
+        if (!m_applicationUpdatePending) updateBadges();
     });
-}
-
-bool TrayIcon::eventFilter(QObject *watched, QEvent *event) {
-    if (watched == qGuiApp &&
-        (event->type() == QEvent::ApplicationPaletteChange || event->type() == QEvent::ApplicationFontChange)) {
-        scheduleBadgeUpdate();
-    }
-    return QObject::eventFilter(watched, event);
 }
 
 void TrayIcon::updateStatus() {

@@ -1,6 +1,8 @@
 #include "rules.h"
 
 #include <KCModule>
+#include <KApplicationTrader>
+#include <KSycoca>
 #include <KConfigGroup>
 #include <KPluginFactory>
 #include <KService>
@@ -266,7 +268,16 @@ class RuleProxy : public QSortFilterProxyModel {
 class RuleDelegate : public QStyledItemDelegate {
     Q_OBJECT
   public:
-    using QStyledItemDelegate::QStyledItemDelegate;
+    explicit RuleDelegate(QObject *parent) : QStyledItemDelegate(parent) {
+        connect(KSycoca::self(), &KSycoca::databaseChanged, this, [this]() {
+            m_icons.clear();
+            m_windowClasses.clear();
+            m_foldedIdentities.clear();
+            m_windowClassesReady = false;
+            if (auto view = qobject_cast<QAbstractItemView *>(this->parent()))
+                view->viewport()->update();
+        }, Qt::QueuedConnection);
+    }
     QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &) const override {
         return QSize(760, std::max(102, option.fontMetrics.height() * 3 + 34));
     }
@@ -293,19 +304,8 @@ class RuleDelegate : public QStyledItemDelegate {
         p->setPen(selected ? option.palette.highlight().color() : option.palette.mid().color());
         p->setBrush(selected ? option.palette.alternateBase() : option.palette.base());
         p->drawRoundedRect(r.adjusted(0, 0, -1, -1), 4, 4);
-        const auto match = rule.value(QStringLiteral("match")).toMap();
-        const QString desktop = desktopIdentity(
-            match.value(QStringLiteral("desktopFile")).toMap().value(QStringLiteral("value")).toString());
-        if (!m_icons.contains(desktop)) {
-            const auto service = desktop.isEmpty() ? KService::Ptr()
-                                                   : KService::serviceByStorageId(desktop + QStringLiteral(".desktop"));
-            const auto name = service ? service->icon() : QStringLiteral("preferences-system-windows");
-            auto icon = QDir::isAbsolutePath(name) ? QIcon(name) : QIcon::fromTheme(name);
-            if (icon.pixmap(32, 32).isNull())
-                icon = QIcon::fromTheme(QStringLiteral("preferences-system-windows"));
-            m_icons.insert(desktop, icon);
-        }
-        m_icons.value(desktop).paint(p, QRect(r.left() + 14, r.center().y() - 18, 36, 36));
+        ruleIcon(rule.value(QStringLiteral("match")).toMap())
+            .paint(p, QRect(r.left() + 14, r.center().y() - 18, 36, 36));
         QRect textRect(r.left() + 64, r.top() + 12,
                        std::max(30, checkRect(r, option.fontMetrics).left() - r.left() - 72),
                        option.fontMetrics.height());
@@ -381,7 +381,64 @@ class RuleDelegate : public QStyledItemDelegate {
     }
 
   private:
+    QIcon ruleIcon(const QVariantMap &match) const {
+        QStringList identities;
+        for (const auto *key : {"desktopFile", "resourceClass", "resourceName", "legacyClass"})
+            identities.append(match.value(QLatin1String(key)).toMap().value(QStringLiteral("value")).toString());
+        // Include every identity; class-only rules must not share the empty desktop-ID cache entry.
+        const auto cacheKey = identities.join(QChar::Null);
+        const auto cached = m_icons.constFind(cacheKey);
+        if (cached != m_icons.cend()) return cached.value();
+        QIcon icon;
+        for (const auto &identity : identities) {
+            // Only installed identities are allowed, never window/rule-supplied desktop paths.
+            if (identity.isEmpty() || identity.contains(QLatin1Char('/')) || identity.contains(QLatin1Char('\\')) ||
+                identity.contains(QLatin1Char(':')) || identity.contains(QChar::Null)) continue;
+            const auto desktop = identity.endsWith(QLatin1String(".desktop"))
+                                     ? identity : identity + QStringLiteral(".desktop");
+            auto service = KService::serviceByStorageId(desktop);
+            if (!service) {
+                if (!m_windowClassesReady) {
+                    // Build the metadata alias index once, not on every row repaint.
+                    const auto addAlias = [](auto &index, const QString &alias, const KService::Ptr &application) {
+                        if (alias.isEmpty()) return;
+                        if (!index.contains(alias))
+                            index.insert(alias, application);
+                        else if (const auto previous = index.value(alias);
+                                 previous && previous->storageId() != application->storageId())
+                            index[alias] = {}; // Never choose a random application for an ambiguous alias.
+                    };
+                    for (const auto &application : KApplicationTrader::query([](const KService::Ptr &) { return true; })) {
+                        const auto wmClass = application->property<QString>(QStringLiteral("StartupWMClass"));
+                        addAlias(m_windowClasses, wmClass, application);
+                        for (const auto &alias : {wmClass, application->desktopEntryName(),
+                                                 desktopIdentity(application->storageId())})
+                            addAlias(m_foldedIdentities, alias.toCaseFolded(), application);
+                    }
+                    m_windowClassesReady = true;
+                }
+                service = m_windowClasses.value(identity);
+                // Presentation-only fallback for legacy class capitalization. Rule
+                // matching remains case-sensitive, and only unique aliases are used.
+                if (!service && !m_windowClasses.contains(identity))
+                    service = m_foldedIdentities.value(desktopIdentity(identity).toCaseFolded());
+            }
+            if (!service || !service->isApplication()) continue;
+            const auto name = service->icon();
+            const auto candidate = QDir::isAbsolutePath(name) ? QIcon(name) : QIcon::fromTheme(name);
+            if (!candidate.pixmap(32, 32).isNull()) {
+                icon = candidate;
+                break;
+            }
+        }
+        if (icon.isNull()) icon = QIcon::fromTheme(QStringLiteral("preferences-system-windows"));
+        m_icons.insert(cacheKey, icon);
+        return icon;
+    }
     mutable QHash<QString, QIcon> m_icons;
+    mutable QHash<QString, KService::Ptr> m_windowClasses;
+    mutable QHash<QString, KService::Ptr> m_foldedIdentities;
+    mutable bool m_windowClassesReady = false;
   signals:
     void editRequested(const QString &id);
     void deleteRequested(const QString &id);
@@ -1052,8 +1109,13 @@ class Minimize2TrayConfig : public KCModule {
             }));
         connect(m_sort, &QComboBox::currentIndexChanged, this, [this]() {
             const auto selected = selectedId();
-            m_savedSort = m_sort->currentData().toString();
-            m_proxy->setOrder(m_savedSort);
+            const auto order = m_sort->currentData().toString();
+            m_proxy->setOrder(order);
+            // Persist this view preference immediately, independently of Apply/Cancel
+            // or whether session shutdown runs the module destructor.
+            auto state = uiState(QStringLiteral("page"));
+            state.writeEntry("sort", order);
+            state.sync();
             const int at = m_model->find(selected);
             if (at >= 0)
                 m_list->setCurrentIndex(m_proxy->mapFromSource(m_model->index(at)));
@@ -1089,7 +1151,6 @@ class Minimize2TrayConfig : public KCModule {
         for (const auto &connection : m_stateConnections)
             disconnect(connection);
         auto state = uiState(QStringLiteral("page"));
-        state.writeEntry("sort", m_savedSort);
         state.writeEntry("search", m_savedSearch);
         state.writeEntry("tab", m_savedTab);
         state.writeEntry("selection", m_savedSelection);
@@ -1385,7 +1446,6 @@ class Minimize2TrayConfig : public KCModule {
     bool m_uiHidden = false;
     QList<QMetaObject::Connection> m_stateConnections;
     bool m_activationRegistered = false;
-    QString m_savedSort = QStringLiteral("title");
     QString m_savedSearch;
     QString m_savedSelection;
     int m_savedTab = 0;

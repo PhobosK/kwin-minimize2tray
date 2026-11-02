@@ -4,6 +4,7 @@
 #include <KAboutApplicationDialog>
 #include <KAboutData>
 #include <KPluginMetaData>
+#include <KConfigGroup>
 #include <QCoreApplication>
 #include <QDBusConnection>
 #include <QDBusMessage>
@@ -19,8 +20,11 @@
 ScriptConfig::ScriptConfig(QObject *parent) : QObject(parent), m_config(QStringLiteral("kwinrc")) {
     m_elapsed.start();
     m_reloadTimer.setSingleShot(true);
+    m_reloadTimer.setInterval(50);
     connect(&m_reloadTimer, &QTimer::timeout, this, &ScriptConfig::reload);
-    const auto scheduleReload = [this]() { m_reloadTimer.start(); };
+    const auto scheduleReload = [this]() {
+        if (!m_reloadTimer.isActive()) m_reloadTimer.start();
+    };
     connect(&m_watch, &KDirWatch::dirty, this, scheduleReload);
     connect(&m_watch, &KDirWatch::created, this, scheduleReload);
     connect(&m_watch, &KDirWatch::deleted, this, scheduleReload);
@@ -46,11 +50,20 @@ ScriptConfig::~ScriptConfig() {
 
 void ScriptConfig::reload() {
     m_config.reparseConfiguration();
-    QString error;
-    const auto rules = Minimize2Tray::readRules(m_config, error);
+    auto rules = m_values.value(QStringLiteral("rules")).toList();
+    QString error = m_error;
+    const KConfigGroup group(&m_config, Minimize2Tray::ConfigGroup);
+    // Geometry and other KWin settings share this file. Decode rules only when
+    // their document changed; preserve the last valid rules on malformed edits.
+    if (!m_hasRulesSource || !group.hasKey("rules") ||
+        group.readEntry("rules", QString()) != m_rulesSource) {
+        const auto decoded = Minimize2Tray::readRules(m_config, error);
+        if (error.isEmpty() || !m_values.contains(QStringLiteral("rules"))) rules = decoded;
+        m_hasRulesSource = group.hasKey("rules");
+        m_rulesSource = group.readEntry("rules", QString());
+    }
     auto values = Minimize2Tray::readSettings(m_config);
-    // Keep the last valid rules if an external edit is malformed.
-    values.insert(QStringLiteral("rules"), error.isEmpty() ? rules : m_values.value(QStringLiteral("rules"), rules));
+    values.insert(QStringLiteral("rules"), rules);
     if (error != m_error) {
         m_error = error;
         if (!error.isEmpty()) {

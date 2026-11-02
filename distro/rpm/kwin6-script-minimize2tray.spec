@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
-# Override the release with --define 'release_version 0.6.1'.
+# Override the release with --define 'release_version 0.6.2'.
 # To build a commit instead, also add --define 'commit FULL_SHA'.
-%{!?release_version:%global release_version 0.6.1}
+%{!?release_version:%global release_version 0.6.2}
 
 # Download the fixed archive when it is missing from SOURCES.
 %global _disable_source_fetch 0
@@ -63,6 +63,9 @@ module. This package builds the PhobosK fork for KDE Plasma 6.
 %{_libdir}/qt6/plugins/kwin/effects/configs/kcm_minimize2tray.so
 
 %changelog
+* Mon Nov 02 2026 PhobosK
+- Release 0.6.2: harden tray restoration and reduce compositor event overhead.
+- Resolve rule application icons and persist sorting immediately.
 * Sun Nov 01 2026 PhobosK
 - Release 0.6.1: fix startup hiding, configuration stacking and rule sorting.
 * Sun Nov 01 2026 PhobosK

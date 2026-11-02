@@ -1,26 +1,7 @@
-function commaSeparate(string) {
-    if (!string || typeof string !== "string") {
-        return [];
-    }
-    return string
-        .split(",")
-        .map((part) => part.trim())
-        .filter((part) => part != "");
-}
-
 function isValidWindow(window) {
     return window && !isProtectedWindow(window) && window.minimizable && window.normalWindow &&
         !window.dialog && !window.modal && !window.specialWindow &&
         !window.appletPopup && !window.splash && !window.utility && !window.transient;
-}
-
-function dumpProps(obj) {
-    for (var k of Object.keys(obj)) {
-        const val = obj[k];
-        if (k === 'metaData')
-            continue;
-        print(k + "=" + val + "\n");
-    }
 }
 
 function connectSignal(connections, signal, callback) {
@@ -44,19 +25,24 @@ function disconnectSignals(connections) {
 function setup(window) {
     if (shuttingDown || window.internalId in trackedWindows) return;
     const connections = [];
-    trackedWindows[window.internalId] = connections;
+    trackedWindows[window.internalId] = {window: window, connections: connections};
     const watch = (signal, callback) => connectSignal(connections, signal, callback);
     watch(window.captionChanged, () => {
         updateToolTip(window);
         scheduleWindow(window);
     });
-    watch(window.windowClassChanged, () => scheduleWindow(window));
-    watch(window.windowRoleChanged, () => scheduleWindow(window));
-    watch(window.transientChanged, () => scheduleWindow(window));
-    watch(window.modalChanged, () => scheduleWindow(window));
-    watch(window.minimizeableChanged, () => scheduleWindow(window));
-    watch(window.desktopsChanged, () => updateToolTip(window));
-    watch(window.outputChanged, () => updateToolTip(window));
+    watch(window.windowClassChanged, () => scheduleWindow(window, true));
+    watch(window.windowRoleChanged, () => scheduleWindow(window, true));
+    watch(window.transientChanged, () => scheduleWindow(window, true));
+    watch(window.modalChanged, () => scheduleWindow(window, true));
+    watch(window.minimizeableChanged, () => scheduleWindow(window, true));
+    const placementChanged = () => {
+        updateToolTip(window);
+        if (pendingActivation && pendingActivation.windowId === window.internalId) finishWindowActivation();
+    };
+    watch(window.desktopsChanged, placementChanged);
+    watch(window.activitiesChanged, placementChanged);
+    watch(window.outputChanged, placementChanged);
     watch(window.demandsAttentionChanged, () => {
         updateDemandsAttention(window);
         enforceTrayManagedState(window);
@@ -77,28 +63,20 @@ function setup(window) {
     watch(window.iconChanged, () => updateWindowIcon(window));
     watch(window.desktopFileNameChanged, () => {
         updateWindowIcon(window);
-        scheduleWindow(window);
+        scheduleWindow(window, true);
     });
 }
 
 function forgetWindow(window) {
     const windowId = window.internalId;
-    if (pendingActivation === windowId) pendingActivation = null;
-    if (windowId in trackedWindows) disconnectSignals(trackedWindows[windowId]);
+    if (pendingActivation && pendingActivation.windowId === windowId) cancelWindowActivation();
+    if (windowId in trackedWindows) disconnectSignals(trackedWindows[windowId].connections);
+    delete hiddenWindows[windowId]; // Never restore a closing window from a pending retry.
     removeTrayIcon(window);
     delete automaticMatches[windowId];
     delete automaticDecisions[windowId];
-    delete hiddenWindows[windowId];
     delete trackedWindows[windowId];
     delete pendingWindows[windowId];
-}
-
-function setupTrayicon(window) {
-    if (window.skipTaskbar) {
-        addTrayIcon(window);
-    } else {
-        removeTrayIcon(window);
-    }
 }
 
 function formattedWindowInfo(w) {
@@ -108,7 +86,7 @@ function formattedWindowInfo(w) {
     } else {
         desktops = w.desktops.map(desktop => desktop.name).join(", ");
     }
-    return `${w.caption || w.resourceName || w.resourceClass}\n${desktops} @ ${w.output.name}`;
+    return `${w.caption || w.resourceName || w.resourceClass}\n${desktops} @ ${w.output ? w.output.name : ""}`;
 }
 
 function addTrayIcon(window, automatic = false) {
@@ -160,9 +138,9 @@ function restoreManagedWindows() {
     reconcileTimer.stop();
     pendingWindows = new Object();
     disconnectSignals(workspaceConnections);
-    Object.keys(trackedWindows).forEach(id => disconnectSignals(trackedWindows[id]));
+    Object.keys(trackedWindows).forEach(id => disconnectSignals(trackedWindows[id].connections));
     trackedWindows = new Object();
-    pendingActivation = null;
+    cancelWindowActivation();
     Workspace.windows.forEach(window => {
         // Drop tray ownership before restoring flags so the guard cannot rehide it.
         delete trayIcons[window.internalId];
@@ -273,7 +251,7 @@ function hideWindow(window, automatic = false, reason = "manual") {
     if (reason !== "startup") cancelStartupProtection(windowId);
     if (shuttingDown || !(windowId in trayIcons) ||
         (!isValidWindow(window) && !scriptConfig.matchingBehavior(windowInfo(window)).matched)) return false;
-    if (pendingActivation === windowId) pendingActivation = null;
+    if (pendingActivation && pendingActivation.windowId === windowId) cancelWindowActivation();
     if (!(windowId in hiddenWindows)) {
         hiddenWindows[windowId] = {
             automatic: automatic,
@@ -303,17 +281,6 @@ function releaseHiddenWindow(window, restore) {
     if (restore) window.minimized = false;
 }
 
-function setMinimize(minimize, window) {
-    cancelStartupProtection(window.internalId);
-    window.minimized = minimize;
-}
-
-function setSkip(skip, window) {
-    window.skipPager = skip;
-    window.skipTaskbar = skip;
-    window.skipSwitcher = skip;
-}
-
 function enforceTrayManagedState(window) {
     if (!(window.internalId in trayIcons) || !(window.internalId in hiddenWindows) || !window.minimized) {
         return;
@@ -337,66 +304,98 @@ function enforceTrayManagedState(window) {
     }
 }
 
-function toggleMinimize(windowId) {
-    const window = getWindow(windowId);
-    if (!window) return;
-    cancelStartupProtection(windowId);
-    window.minimized = !window.minimized;
-}
-
 function toggleShowHide(windowId, forceShow = false) {
     const window = getWindow(windowId);
-    if (!window) return;
+    if (!window || !(windowId in trayIcons)) return;
 
     const restoring = cancelStartupProtection(windowId);
-    if (window.minimized || restoring || forceShow) {
+    if (window.minimized || restoring || forceShow || !onCurrentWorkspace(window)) {
         automaticDecisions[windowId] = "shown";
-        releaseHiddenWindow(window, true);
-        window.minimized = false;
         activateWindowInPlace(window);
     } else {
         hideWindow(window);
     }
 }
 
+function perOutputDesktops(window) {
+    return window.output && typeof Workspace.currentDesktopForScreen === "function" &&
+        typeof Workspace.setCurrentDesktopForScreen === "function";
+}
+
+function currentDesktop(window) {
+    return perOutputDesktops(window) ? Workspace.currentDesktopForScreen(window.output) : Workspace.currentDesktop;
+}
+
+function onCurrentWorkspace(window) {
+    return (!window.activities.length || window.activities.indexOf(Workspace.currentActivity) !== -1) &&
+        (!window.desktops.length || window.desktops.indexOf(currentDesktop(window)) !== -1);
+}
+
+function cancelWindowActivation() {
+    pendingActivation = null;
+    activationTimer.stop();
+}
+
 function activateWindowInPlace(window) {
     cancelStartupProtection(window.internalId);
-    pendingActivation = window.internalId;
-    const activities = window.activities;
-    if (activities.length && activities.indexOf(Workspace.currentActivity) === -1) {
-        // Activity changes are asynchronous; focus only after KWin reports the new activity.
-        Workspace.currentActivity = activities[0];
-        return;
-    }
+    pendingActivation = {windowId: window.internalId, window: window,
+                         started: scriptConfig.monotonicMilliseconds(), activity: ""};
+    activationTimer.restart();
     finishWindowActivation();
 }
 
 function finishWindowActivation() {
-    if (pendingActivation === null) return;
-    const window = getWindow(pendingActivation);
-    if (!window || window.minimized || isProtectedWindow(window)) {
-        pendingActivation = null;
+    const request = pendingActivation;
+    if (!request) return;
+    const window = getWindow(request.windowId);
+    if (shuttingDown || window !== request.window || isProtectedWindow(window) ||
+        scriptConfig.monotonicMilliseconds() - request.started >= activationTimer.interval) {
+        cancelWindowActivation();
         return;
     }
-    if (window.activities.length && window.activities.indexOf(Workspace.currentActivity) === -1) return;
-    pendingActivation = null;
-
-    const desktops = window.desktops;
-    const perScreen = window.output && typeof Workspace.currentDesktopForScreen === "function" &&
-        typeof Workspace.setCurrentDesktopForScreen === "function";
-    const current = perScreen ? Workspace.currentDesktopForScreen(window.output) : Workspace.currentDesktop;
-    if (desktops.length && desktops.indexOf(current) === -1) {
-        // Switch the view first so KWin's activation policy cannot bring the window here.
-        const desktop = desktops[desktops.length - 1];
-        if (perScreen) Workspace.setCurrentDesktopForScreen(desktop, window.output);
-        else Workspace.currentDesktop = desktop;
+    const activities = window.activities;
+    if (activities.length && activities.indexOf(Workspace.currentActivity) === -1) {
+        // A rejected/unavailable activity switch must not leave an unbounded request.
+        // Recheck memberships on their signals, without repeatedly requesting a switch.
+        if (request.activity !== activities[0]) {
+            request.activity = activities[0];
+            Workspace.currentActivity = request.activity;
+        }
+        return;
     }
+    const desktops = window.desktops;
+    if (desktops.length && desktops.indexOf(currentDesktop(window)) === -1) {
+        const desktop = desktops[desktops.length - 1];
+        if (perOutputDesktops(window))
+            Workspace.setCurrentDesktopForScreen(desktop, window.output);
+        else
+            Workspace.currentDesktop = desktop;
+    }
+    // Setters can emit signals synchronously. A newer request or a closed window wins.
+    if (pendingActivation !== request || getWindow(request.windowId) !== window) return;
+    cancelWindowActivation();
+    // Keep hidden ownership until restoration actually runs, so rule removal and
+    // unload can still recover the window while an activity change is pending.
+    releaseHiddenWindow(window, false);
+    // A client's activation request on restore must not move it to the old workspace.
+    window.minimized = false;
     Workspace.activeWindow = window;
+}
+
+function shortcutWindow(window) {
+    const visited = new Set();
+    while (window && window.transient) {
+        if (visited.has(window) || isProtectedWindow(window)) return null;
+        visited.add(window);
+        window = window.transientFor;
+    }
+    return isValidWindow(window) ? window : null;
 }
 
 function onMinimizeChanged(window) {
     const windowId = window.internalId;
-    if (window.minimized && pendingActivation === windowId) pendingActivation = null;
+    if (window.minimized && pendingActivation && pendingActivation.windowId === windowId)
+        cancelWindowActivation();
     if (!window.minimized) {
         if (windowId in hiddenWindows) {
             if (queueStartupRetry(window)) return;
@@ -430,14 +429,15 @@ function closeOrHideWindow(window) {
 }
 
 function getWindow(windowId) {
-    return Workspace.windows.find(w => w.internalId === windowId);
+    const tracked = trackedWindows[windowId];
+    return tracked ? tracked.window : null;
 }
 
 function closeWindow(windowId) {
     const window = getWindow(windowId);
     if (!window) return;
 
-    if (pendingActivation === windowId) pendingActivation = null;
+    if (pendingActivation && pendingActivation.windowId === windowId) cancelWindowActivation();
     cancelStartupProtection(windowId);
     window.closeWindow();
 }
@@ -448,8 +448,7 @@ function unpinIcon(windowId) {
     cancelStartupProtection(windowId);
     automaticDecisions[windowId] = "unpinned";
     removeTrayIcon(window);
-    releaseHiddenWindow(window, true);
-    window.minimized = false;
+    releaseHiddenWindow(window, false);
     activateWindowInPlace(window);
 }
 
@@ -492,20 +491,22 @@ function isProtectedWindow(window) {
     return window && scriptConfig.isProtected(windowInfo(window));
 }
 
-function scheduleWindow(window) {
+function scheduleWindow(window, identityChanged = false) {
     if (shuttingDown) return;
+    if (identityChanged && pendingActivation && pendingActivation.windowId === window.internalId)
+        cancelWindowActivation();
     cancelStartupProtection(window.internalId);
     pendingWindows[window.internalId] = true;
-    reconcileTimer.restart();
+    if (!reconcileTimer.running) reconcileTimer.start();
 }
 
 function reconcileWindows() {
     if (shuttingDown) return;
     const pending = pendingWindows;
     pendingWindows = new Object();
-    Workspace.windows.forEach(window => {
-        if (!(window.internalId in pending)) return;
-        const windowId = window.internalId;
+    Object.keys(pending).forEach(windowId => {
+        const window = getWindow(windowId);
+        if (!window) return;
         const previous = automaticMatches[windowId] || {matched: false, startInTray: false};
         const behavior = scriptConfig.matchingBehavior(windowInfo(window));
         automaticMatches[windowId] = behavior;

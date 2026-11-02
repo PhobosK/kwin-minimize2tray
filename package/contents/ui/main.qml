@@ -38,6 +38,7 @@ Item {
 
     function reloadConfig() {
         Utils.cancelAllStartupProtection();
+        Utils.cancelWindowActivation();
         const config = scriptConfig.values;
         debugEnabled = config.debugEnabled;
         countUseDot = config.countUseDot;
@@ -52,18 +53,19 @@ Item {
         onTriggered: Utils.reconcileWindows()
     }
 
+    Timer {
+        id: activationTimer
+        interval: 3000
+        onTriggered: Utils.cancelWindowActivation()
+    }
+
     ShortcutHandler {
         name: "Minimize to tray"
         text: "Minimize window to tray (sets skip Taskbar, Switcher & Pager)"
         sequence: "Meta+Alt+PgDown"
         onActivated: {
-            let window = Workspace.activeWindow;
-            if (!window || Utils.isProtectedWindow(window)) return;
-            while (window && window.transient) {
-                window = window.transientFor;
-            }
-            if (!Utils.isValidWindow(window))
-                return;
+            const window = Utils.shortcutWindow(Workspace.activeWindow);
+            if (!window) return;
             const restoring = Utils.cancelStartupProtection(window.internalId);
             if (Utils.addTrayIcon(window)) Utils.toggleShowHide(window.internalId, restoring);
         }

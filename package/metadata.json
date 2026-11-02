@@ -21,7 +21,7 @@
         "License": "GPL",
         "Name": "Minimize to Tray",
         "Icon": "view-visible-symbolic",
-        "Version": "0.6.1",
+        "Version": "0.6.2",
         "Website": "https://github.com/PhobosK/kwin-minimize2tray"
     },
     "X-Plasma-API": "declarativescript",

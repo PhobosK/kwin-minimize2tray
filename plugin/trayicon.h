@@ -78,25 +78,26 @@ class TrayIcon : public QObject {
     QIcon m_desktopIcon;
     QString m_desktopIconName;
     QIcon icon() const { return m_icon; }
-    void setIcon(QIcon icon);
+    void setIcon(const QIcon &icon);
     QUuid m_windowId;
     QUuid windowId() const { return m_windowId; }
     void setWindowId(QUuid windowId);
     QString m_toolTipText;
     QString toolTipText() const { return m_toolTipText; }
-    void setToolTipText(QString toolTipText);
+    void setToolTipText(const QString &toolTipText);
     QString m_xdgName;
     QString xdgName() const { return m_xdgName; }
-    void setXdgName(QString id);
+    void setXdgName(const QString &id);
     void initializeTrayIcon();
     QString m_appName;
     QString appName() const { return m_appName; }
     void updateApplication();
+    void scheduleApplicationUpdate();
     void updateBadges();
     void scheduleBadgeUpdate();
     void updateStatus();
-    bool eventFilter(QObject *watched, QEvent *event) override;
     bool m_badgeUpdatePending = false;
+    bool m_applicationUpdatePending = false;
     bool m_demandsAttention = false;
     bool demandsAttention() const { return m_demandsAttention; }
     void setDemandsAttention(bool demandsAttention);

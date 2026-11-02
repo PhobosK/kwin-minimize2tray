@@ -49,5 +49,7 @@ class ScriptConfig : public QObject {
     QVariantMap m_values;
     QVariantList m_windows;
     QString m_error;
+    QString m_rulesSource;
+    bool m_hasRulesSource = false;
     bool m_registered = false;
 };
