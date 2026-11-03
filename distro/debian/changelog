@@ -1,3 +1,9 @@
+kwin6-script-minimize2tray (1.0.0-1) unstable; urgency=medium
+
+  * Release 1.0.0 with reliability, compatibility and packaging fixes.
+
+ -- PhobosK <PhobosK@users.noreply.github.com>  Tue, 03 Nov 2026 15:37:11 +0200
+
 kwin6-script-minimize2tray (0.6.2-1) unstable; urgency=medium
 
   * Harden tray restoration and reduce compositor event overhead.

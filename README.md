@@ -36,7 +36,7 @@ cd kwin-minimize2tray
 
 Run as a regular user. The installer builds the fork's latest stable `X.Y.Z`/`vX.Y.Z` tag and installs under `/usr`, using sudo only for final copies. It leaves the checkout and existing `build/` alone. Network failures stop installation.
 
-Use `./install.sh --local` for unpublished checkout changes, or `./install.sh --version 0.6.2` for a specific release. Both installers offer `--help` for source selection, commit pinning, prefixes, staged installation and offline archives.
+Use `./install.sh --local` for unpublished checkout changes, or `./install.sh --version 1.0.0` for a specific release. Both installers offer `--help` for source selection, commit pinning, prefixes, staged installation and offline archives.
 
 ### Immutable/user installation
 
@@ -51,7 +51,7 @@ For a custom prefix, use the paths printed by the installer. A user installation
 
 ### openSUSE Tumbleweed RPM
 
-The standalone spec builds this fork only. It defaults to tag `v0.6.2`; `release_version` sets both the RPM and application version. It downloads the selected archive if missing from RPM's `SOURCES` directory.
+The standalone spec builds this fork only. It defaults to tag `v1.0.0`; `release_version` sets both the RPM and application version. It downloads the selected archive if missing from RPM's `SOURCES` directory.
 
 ```sh
 rpmbuild -ba distro/rpm/kwin6-script-minimize2tray.spec
@@ -66,7 +66,7 @@ rpmbuild -ba --define 'release_version 0.4.0' distro/rpm/kwin6-script-minimize2t
 Or select a full commit SHA with an explicit application version:
 
 ```sh
-rpmbuild -ba --define 'release_version 0.6.2' --define 'commit FULL_SHA' distro/rpm/kwin6-script-minimize2tray.spec
+rpmbuild -ba --define 'release_version 1.0.0' --define 'commit FULL_SHA' distro/rpm/kwin6-script-minimize2tray.spec
 ```
 
 The tag format is `vX.Y.Z`. Selected sources must contain this fork's native configuration module and current CMake version option.
