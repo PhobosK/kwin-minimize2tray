@@ -26,7 +26,7 @@ Hide windows to the system tray, similar to [KDocker](https://github.com/user-no
 
 ## Installation
 
-Install Python 3.12+, CMake 3.19+, a C++20 compiler, ECM, KDE’s `kcmshell6` configuration host, Qt 6.6+ development files (DBus, Gui, Qml, Widgets) and KF6 development files (Config, CoreAddons, Service, StatusNotifierItem, KCMUtils, XmlGui). The RPM spec lists openSUSE dependencies.
+Install Python 3.12+, CMake 3.19+, a C++20 compiler, ECM, KDE’s `kcmshell6` configuration host, Qt 6.6+ development files (DBus, Gui, Qml, Widgets) and KF6 development files (Config, CoreAddons, Service, StatusNotifierItem, KCMUtils, XmlGui). The RPM spec lists openSUSE dependencies. Optional **Quit on logout** support also needs Linux 6.13+ headers and the KWin 6.8+ SDK with its Wayland development dependencies; the isolated adapter uses the SDK’s compiler requirements. Rebuild after KWin updates. Without that SDK, other features still build normally. Disable the adapter with `-DBUILD_SESSION_TERMINATION=OFF`.
 
 ```sh
 git clone https://github.com/PhobosK/kwin-minimize2tray.git
@@ -112,6 +112,7 @@ Each rule offers:
 - **Startup:** No startup action, Pin without initially hiding, or Start in tray. Start in tray also applies to existing windows when a rule first matches.
 - **Minimize to tray:** On, Off, or the global default. For minimize-only handling, choose No startup action and Minimize On.
 - **Close to tray:** Uses the separately assigned **Close or hide window to tray** shortcut. It has no default binding and does not change Alt+F4. Titlebar/client close buttons, application Quit and tray Quit still close normally.
+- **Quit on logout:** Off by default. For matching windows whose closing is disabled in KDE, send SIGTERM once per process during session closing. This can end all its windows without save prompts. Protected processes/dialogs are skipped; cancelling logout cannot undo termination. Requires native Wayland, Linux 6.13+ and an adapter matching the running KWin; XWayland windows are left alone.
 - **Retry early startup restoration once:** Off by default. With Start in tray, allows one retry within 1.5 seconds if the window reopens without activation. Show, Unpin, Close, activation, matching-property/configuration changes and unload cancel it. KWin cannot identify who requested a restore; non-activating user restores can also be retried. Disable it if it interferes.
 
 Overlapping rules combine actions: Start in tray wins over pin-only; Minimize On wins over Off, then the global default; any matching rule can enable Close or startup retry.

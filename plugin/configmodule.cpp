@@ -30,6 +30,7 @@
 #include <QFormLayout>
 #include <QGridLayout>
 #include <QHeaderView>
+#include <QHelpEvent>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QKeyEvent>
@@ -53,6 +54,7 @@
 #include <QStyledItemDelegate>
 #include <QTabWidget>
 #include <QTimer>
+#include <QToolTip>
 #include <QTreeWidget>
 #include <QVBoxLayout>
 #include <algorithm>
@@ -67,6 +69,16 @@ template <typename Handler> void whenFinished(QDBusPendingCallWatcher *watcher, 
         QTimer::singleShot(0, context, [watcher, handler]() { handler(watcher); });
     else
         QObject::connect(watcher, &QDBusPendingCallWatcher::finished, context, handler);
+}
+
+QString toolTipText(const QString &text) {
+    return QStringLiteral("<qt>") + text.toHtmlEscaped().replace(QLatin1Char('\n'), QStringLiteral("<br/>")) +
+           QStringLiteral("</qt>");
+}
+
+void comboToolTips(QComboBox *combo, const QStringList &help) {
+    for (int i = 0; i < std::min(combo->count(), int(help.size())); ++i)
+        combo->setItemData(i, toolTipText(help[i]), Qt::ToolTipRole);
 }
 
 QLabel *plainLabel(const QString &text, QWidget *parent = nullptr) {
@@ -155,6 +167,27 @@ QString fieldLabel(const QString &key) {
     if (key == QLatin1String("role"))
         return QObject::tr("Window role");
     return QObject::tr("Window title");
+}
+
+QString fieldToolTip(const QString &key) {
+    if (key == QLatin1String("desktopFile"))
+        return QObject::tr("The application's launcher ID, such as org.kde.konsole, with an optional .desktop suffix. "
+                           "Usually the best application identifier. Use Detect to obtain the actual value; matching "
+                           "is case-sensitive.");
+    if (key == QLatin1String("resourceClass"))
+        return QObject::tr("The window class reported by the application. Often shared by all its windows. "
+                           "Use Detect to obtain the exact value; matching is case-sensitive.");
+    if (key == QLatin1String("resourceName"))
+        return QObject::tr("The window instance reported by the application. It can differ from the class, but is "
+                           "not necessarily unique to one window. Use Detect; matching is case-sensitive.");
+    if (key == QLatin1String("legacyClass"))
+        return QObject::tr("An older imported condition that matches either the window class or the window instance "
+                           "exactly. Matching is case-sensitive.");
+    if (key == QLatin1String("role"))
+        return QObject::tr("An application-defined window role, useful for distinguishing a main window from an "
+                           "editor or tool window. Some applications do not provide one. Matching is case-sensitive.");
+    return QObject::tr("The visible window title. It may change with the open file, page or application state. "
+                       "Contains can match a stable part of the title. Matching is case-sensitive.");
 }
 
 const QStringList fields{QStringLiteral("desktopFile"), QStringLiteral("resourceClass"), QStringLiteral("resourceName"),
@@ -349,6 +382,26 @@ class RuleDelegate : public QStyledItemDelegate {
             .paint(p, deleteRect(r, option.fontMetrics).adjusted(6, 6, -6, -6));
         p->restore();
     }
+    bool helpEvent(QHelpEvent *event, QAbstractItemView *view, const QStyleOptionViewItem &option,
+                   const QModelIndex &index) override {
+        if (!event || !view || !index.isValid())
+            return false;
+        if (event->type() != QEvent::ToolTip)
+            return QStyledItemDelegate::helpEvent(event, view, option, index);
+        const auto rect = option.rect.adjusted(3, 4, -3, -4);
+        QString help;
+        if (checkRect(rect, option.fontMetrics).contains(event->pos()))
+            help = tr("Enable or disable this rule. Changes take effect after Apply or OK.");
+        else if (editRect(rect, option.fontMetrics).contains(event->pos()))
+            help = tr("Edit this rule's matching properties and actions.");
+        else if (deleteRect(rect, option.fontMetrics).contains(event->pos()))
+            help = tr("Delete this rule. Undo delete restores it before Apply or OK.");
+        else
+            help = index.data(Qt::ToolTipRole).toString();
+        // Imported descriptions and titles are plain text, never tooltip HTML.
+        QToolTip::showText(event->globalPos(), toolTipText(help), view->viewport());
+        return true;
+    }
     bool editorEvent(QEvent *event, QAbstractItemModel *model, const QStyleOptionViewItem &option,
                      const QModelIndex &index) override {
         if (event->type() == QEvent::MouseButtonRelease) {
@@ -466,11 +519,18 @@ class RuleDialog : public QDialog {
         m_title = new QLineEdit(rule.value(QStringLiteral("title")).toString());
         m_title->setMaxLength(256);
         m_title->setObjectName(QStringLiteral("ruleTitle"));
+        m_title->setToolTip(
+            toolTipText(tr("A name for this rule in the list. This does not match the application’s window title.")));
         m_description = new QPlainTextEdit(rule.value(QStringLiteral("description")).toString());
         m_description->setMaximumHeight(72);
         m_description->setObjectName(QStringLiteral("ruleDescription"));
+        m_description->setToolTip(
+            toolTipText(tr("An optional note about this rule. It does not affect matching or actions.")));
         m_enabled = new QCheckBox(tr("Enable this rule"));
         m_enabled->setObjectName(QStringLiteral("ruleEnabled"));
+        m_enabled->setToolTip(
+            toolTipText(tr("Apply this rule to matching windows. Disable it to keep the rule for later without "
+                           "applying its actions.")));
         m_enabled->setChecked(rule.value(QStringLiteral("enabled")).toBool());
         form->addRow(tr("Name:"), m_title);
         form->addRow(tr("Description:"), m_description);
@@ -480,32 +540,71 @@ class RuleDialog : public QDialog {
         auto actions = new QFormLayout;
         m_startup = new QComboBox;
         m_startup->setObjectName(QStringLiteral("startupAction"));
+        m_startup->setToolTip(toolTipText(tr(
+            "Choose what happens when a window first matches: leave it alone, add a tray icon while keeping its "
+            "current visibility, or hide it in the tray. Also applies to existing windows when rules are applied.")));
         m_startup->addItem(tr("No startup action"), QStringLiteral("none"));
         m_startup->addItem(tr("Pin without initially hiding"), QStringLiteral("pin"));
         m_startup->addItem(tr("Start in tray"), QStringLiteral("hide"));
         m_startup->setCurrentIndex(behavior.value(QStringLiteral("startInTray")).toBool() ? 2
-                                  : behavior.value(QStringLiteral("autoPin")).toBool() ? 1 : 0);
+                                   : behavior.value(QStringLiteral("autoPin")).toBool()   ? 1
+                                                                                          : 0);
+        comboToolTips(m_startup, {tr("Leave the window as it is when the rule first matches."),
+                                  tr("Add a tray icon without changing whether the window is visible or minimized."),
+                                  tr("Create a tray icon and hide the window on first match, including existing "
+                                     "windows when applying rules.")});
         actions->addRow(tr("Startup:"), m_startup);
         m_startupProtection = new QCheckBox(tr("Retry early startup restoration once"));
         m_startupProtection->setObjectName(QStringLiteral("startupProtection"));
         m_startupProtection->setChecked(behavior.value(QStringLiteral("startupProtection")).toBool());
         m_startupProtection->setEnabled(m_startup->currentData() == QLatin1String("hide"));
-        m_startupProtection->setToolTip(tr("For 1.5 seconds after startup hiding, retry one unminimize that does not "
-                                          "activate the window. Show, Unpin and activation cancel the retry. "
-                                          "KWin cannot reliably distinguish application and user restores; leave "
-                                          "this off if it interferes with restoration."));
+        m_startupProtection->setToolTip(
+            toolTipText(tr("If an app immediately reopens its window after Start in tray, hide it once "
+                           "more within 1.5 seconds unless it becomes active. Show, Unpin and "
+                           "activation cancel the retry. A user restore without activation can also "
+                           "be retried; leave this off if it interferes.")));
         actions->addRow(QString(), m_startupProtection);
         m_minimize = new QComboBox;
         m_minimize->setObjectName(QStringLiteral("minimizeToTray"));
+        m_minimize->setToolTip(
+            toolTipText(tr("On hides matching windows in the tray when minimized. Off keeps ordinary "
+                           "minimization. Use global follows Hide on minimize on the Tray & badges page.")));
         m_minimize->addItem(tr("Use global Hide on minimize setting"), QStringLiteral("inherit"));
         m_minimize->addItem(tr("On"), QStringLiteral("enabled"));
         m_minimize->addItem(tr("Off"), QStringLiteral("disabled"));
         m_minimize->setCurrentIndex(m_minimize->findData(behavior.value(QStringLiteral("minimizeToTray"))));
+        comboToolTips(m_minimize,
+                      {tr("Follow Hide on minimize on the Tray & badges page."),
+                       tr("Hide the window in the tray when it is minimized."),
+                       tr("Allow ordinary minimization without tray hiding, even if the window has a tray icon.")});
         actions->addRow(tr("Minimize to tray:"), m_minimize);
         m_close = new QCheckBox(tr("Close to tray through the optional shortcut"));
         m_close->setObjectName(QStringLiteral("closeToTray"));
+        m_close->setToolTip(
+            toolTipText(tr("Hide the matching window when you use the separately assigned ‘Close or hide window to "
+                           "tray’ shortcut. This does not intercept titlebar Close, Alt+F4 or application Quit.")));
         m_close->setChecked(behavior.value(QStringLiteral("closeToTray")).toBool());
         actions->addRow(QString(), m_close);
+        m_quitOnLogout = new QCheckBox(tr("Quit on logout"));
+        m_quitOnLogout->setObjectName(QStringLiteral("terminateOnLogout"));
+        m_quitOnLogout->setChecked(behavior.value(QStringLiteral("terminateOnLogout")).toBool());
+        m_quitOnLogout->setToolTip(
+            toolTipText(tr("During logout, restart or shutdown, send SIGTERM if KDE has disabled closing "
+                           "for a matching window. This terminates its whole process, possibly without "
+                           "save prompts. Requires a verified native Wayland process, Linux 6.13+ and "
+                           "an adapter built for the running KWin. XWayland and protected processes are "
+                           "left alone. Cancelling logout cannot restore a terminated application.")));
+        actions->addRow(QString(), m_quitOnLogout);
+#if !MINIMIZE2TRAY_HAS_SESSION_PROCESS
+        // Preserve imported settings, but still allow disabling an existing opt-in.
+        m_quitOnLogout->setEnabled(m_quitOnLogout->isChecked());
+        connect(m_quitOnLogout, &QCheckBox::toggled, this, [this](bool enabled) {
+            if (!enabled)
+                m_quitOnLogout->setEnabled(false);
+        });
+        actions->addRow(QString(),
+                        plainLabel(tr("Quit on logout is unavailable: this build has no matching KWin adapter.")));
+#endif
         outer->addLayout(actions);
         outer->addWidget(plainLabel(tr("Minimize and close actions do not require a startup action. Start in tray "
                                        "hides on first match, including existing windows when applying rules. "
@@ -517,7 +616,13 @@ class RuleDialog : public QDialog {
         auto detectRow = new QHBoxLayout;
         m_detect = makeButton(tr("Detect window properties…"), QStringLiteral("edit-find"));
         m_detect->setObjectName(QStringLiteral("detectWindow"));
+        m_detect->setToolTip(
+            toolTipText(tr("Use KWin’s window picker to read an application’s actual matching properties, then "
+                           "choose which ones to use. Press Escape to cancel picking.")));
         m_delay = new QSpinBox;
+        m_delay->setObjectName(QStringLiteral("detectDelay"));
+        m_delay->setToolTip(toolTipText(tr(
+            "Wait this many seconds before starting the window picker, giving you time to open the desired window.")));
         m_delay->setRange(0, 30);
         m_delay->setSuffix(tr(" s"));
         m_delay->setValue(uiState(QStringLiteral("rule-editor")).readEntry("detectDelay", 0));
@@ -537,13 +642,23 @@ class RuleDialog : public QDialog {
         scope->addWidget(plainLabel(tr("Window type:")));
         m_type = new QComboBox;
         m_type->setObjectName(QStringLiteral("windowType"));
+        m_type->setToolTip(
+            toolTipText(tr("Limit this rule to normal windows, utility windows or non-modal dialogs. Modal dialogs "
+                           "and system windows remain protected.")));
         m_type->addItem(tr("Normal application window"), QStringList{QStringLiteral("normal")});
         m_type->addItem(tr("Dialog (non-modal only)"), QStringList{QStringLiteral("dialog")});
         m_type->addItem(tr("Utility window"), QStringList{QStringLiteral("utility")});
         m_type->addItem(tr("Any supported type"),
                         QStringList{QStringLiteral("normal"), QStringLiteral("dialog"), QStringLiteral("utility")});
+        comboToolTips(m_type, {tr("Match normal application windows."),
+                               tr("Match non-modal dialogs, subject to child-window protection."),
+                               tr("Match utility or tool windows, subject to child-window protection."),
+                               tr("Match any supported normal, non-modal dialog or utility window.")});
         m_children = new QCheckBox(tr("Keep child windows and dialogs visible"));
         m_children->setObjectName(QStringLiteral("keepChildrenVisible"));
+        m_children->setToolTip(
+            toolTipText(tr("Keep checked to exclude child windows and dialogs. Unchecking allows matching "
+                           "non-modal children of the selected types; modal dialogs remain protected.")));
         const auto match = rule.value(QStringLiteral("match")).toMap();
         m_children->setChecked(!match.value(QStringLiteral("includeChildren")).toBool());
         const auto types = match.value(QStringLiteral("windowTypes")).toStringList();
@@ -554,6 +669,8 @@ class RuleDialog : public QDialog {
         if (typeIndex < 0) {
             m_type->addItem(tr("Selected types: %1").arg(types.join(QStringLiteral(", "))), types);
             typeIndex = m_type->count() - 1;
+            m_type->setItemData(typeIndex, toolTipText(tr("Match only the window types listed in this choice.")),
+                                Qt::ToolTipRole);
         }
         m_type->setCurrentIndex(typeIndex);
         scope->addWidget(m_type);
@@ -573,11 +690,22 @@ class RuleDialog : public QDialog {
             auto use = new QCheckBox;
             use->setObjectName(key + QStringLiteral("Use"));
             use->setAccessibleName(tr("Match %1").arg(fieldLabel(key)));
+            use->setToolTip(
+                toolTipText(tr("Require this property to match. All checked properties must match together.") +
+                            QLatin1Char('\n') + fieldToolTip(key)));
             auto op = new QComboBox;
             op->setObjectName(key + QStringLiteral("Operator"));
+            op->setToolTip(
+                toolTipText(key == QLatin1String("role") || key == QLatin1String("caption")
+                                ? tr("Equals matches the complete value; Contains matches a literal part of it. Both "
+                                     "are case-sensitive; wildcards and regular expressions are not supported.")
+                                : tr("Match the complete application identifier exactly, including capitalization.")));
             op->addItem(tr("Equals"), QStringLiteral("equals"));
             if (key == QLatin1String("role") || key == QLatin1String("caption"))
                 op->addItem(tr("Contains"), QStringLiteral("contains"));
+            comboToolTips(op, {tr("Match the entire value, including capitalization."),
+                               tr("Match a literal part of the value, including capitalization. No wildcards or "
+                                  "regular expressions.")});
             auto value = new QLineEdit;
             value->setObjectName(key + QStringLiteral("Value"));
             value->setMaxLength(1024);
@@ -588,7 +716,9 @@ class RuleDialog : public QDialog {
             value->setText(condition.value(QStringLiteral("value")).toString());
             m_conditions.insert(key, {use, op, value});
             table->addWidget(use, row, 0);
-            table->addWidget(plainLabel(fieldLabel(key)), row, 1);
+            auto label = plainLabel(fieldLabel(key));
+            label->setToolTip(toolTipText(fieldToolTip(key)));
+            table->addWidget(label, row, 1);
             table->addWidget(op, row, 2);
             table->addWidget(value, row++, 3);
             auto updateEnabled = [use, op, value]() {
@@ -600,7 +730,7 @@ class RuleDialog : public QDialog {
             connect(use, &QCheckBox::toggled, this, &RuleDialog::edited);
             connect(op, &QComboBox::currentIndexChanged, this, &RuleDialog::edited);
             connect(value, &QLineEdit::textChanged, this, &RuleDialog::edited);
-            value->setToolTip(tr("Matching is case-sensitive. Application identities use exact matching."));
+            value->setToolTip(toolTipText(fieldToolTip(key)));
         }
         outer->addLayout(table);
         outer->addWidget(plainLabel(tr("All selected properties must match. Separate editors may also be Normal "
@@ -612,10 +742,14 @@ class RuleDialog : public QDialog {
         previewHeader->addStretch();
         auto refresh = makeButton(tr("Refresh"), QStringLiteral("view-refresh"));
         refresh->setObjectName(QStringLiteral("refreshPreview"));
+        refresh->setToolTip(
+            toolTipText(tr("Refresh the list of open windows and check them against your unsaved rule edits.")));
         previewHeader->addWidget(refresh);
         outer->addLayout(previewHeader);
         m_preview = new QTreeWidget;
         m_preview->setObjectName(QStringLiteral("windowPreview"));
+        m_preview->setToolTip(toolTipText(
+            tr("Shows which open windows match this rule and why others are excluded. Uses your unsaved edits.")));
         m_preview->setHeaderLabels({tr("Window"), tr("Result")});
         m_preview->setRootIsDecorated(false);
         m_preview->setMinimumHeight(100);
@@ -633,6 +767,12 @@ class RuleDialog : public QDialog {
         dialogLayout->addWidget(m_error);
         dialogLayout->addWidget(pendingNotice);
         auto buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+        buttons->button(QDialogButtonBox::Ok)
+            ->setToolTip(
+                toolTipText(tr("Update the pending rule list with these edits. Apply or OK on the main page saves the "
+                               "configuration.")));
+        buttons->button(QDialogButtonBox::Cancel)
+            ->setToolTip(toolTipText(tr("Discard changes made in this rule editor.")));
         dialogLayout->addWidget(buttons);
         connect(buttons, &QDialogButtonBox::accepted, this, &RuleDialog::accept);
         connect(buttons, &QDialogButtonBox::rejected, this, &RuleDialog::reject);
@@ -648,6 +788,7 @@ class RuleDialog : public QDialog {
         connect(m_startupProtection, &QCheckBox::toggled, this, &RuleDialog::edited);
         connect(m_minimize, &QComboBox::currentIndexChanged, this, &RuleDialog::edited);
         connect(m_close, &QCheckBox::toggled, this, &RuleDialog::edited);
+        connect(m_quitOnLogout, &QCheckBox::toggled, this, &RuleDialog::edited);
         connect(m_title, &QLineEdit::textChanged, this, &RuleDialog::edited);
         connect(m_description, &QPlainTextEdit::textChanged, this, &RuleDialog::edited);
         QTimer::singleShot(0, this, &RuleDialog::refreshPreview);
@@ -663,8 +804,9 @@ class RuleDialog : public QDialog {
                         {QStringLiteral("startInTray"), m_startup->currentData() == QLatin1String("hide")},
                         {QStringLiteral("minimizeToTray"), m_minimize->currentData()},
                         {QStringLiteral("closeToTray"), m_close->isChecked()},
-                        {QStringLiteral("startupProtection"), m_startup->currentData() == QLatin1String("hide") &&
-                                                               m_startupProtection->isChecked()}};
+                        {QStringLiteral("terminateOnLogout"), m_quitOnLogout->isChecked()},
+                        {QStringLiteral("startupProtection"),
+                         m_startup->currentData() == QLatin1String("hide") && m_startupProtection->isChecked()}};
         QVariantMap match{{QStringLiteral("windowTypes"), m_type->currentData()},
                           {QStringLiteral("includeChildren"), !m_children->isChecked()}};
         for (auto it = m_conditions.begin(); it != m_conditions.end(); ++it) {
@@ -837,6 +979,7 @@ class RuleDialog : public QDialog {
         layout->addWidget(plainLabel(tr("Choose what identifies the window. These values will fill in the rule.")));
         auto properties = new QTreeWidget;
         properties->setObjectName(QStringLiteral("detectedProperties"));
+        properties->setToolTip(toolTipText(tr("Select at least one application identifier and any optional role, title or type. All selected properties must match together.")));
         properties->setRootIsDecorated(false);
         properties->setHeaderLabels({tr("Use"), tr("Property"), tr("Detected value")});
         bool identitySelected = false;
@@ -845,6 +988,8 @@ class RuleDialog : public QDialog {
                 continue;
             auto item = new QTreeWidgetItem(properties, {QString(), fieldLabel(key), info.value(key).toString()});
             item->setData(0, Qt::UserRole, key);
+            for (int column = 0; column < 3; ++column)
+                item->setToolTip(column, toolTipText(fieldToolTip(key)));
             const bool identity = key == QLatin1String("desktopFile") || key == QLatin1String("resourceClass") ||
                                   key == QLatin1String("resourceName");
             item->setCheckState(0, (!identitySelected && identity) || key == QLatin1String("role") ? Qt::Checked
@@ -856,6 +1001,10 @@ class RuleDialog : public QDialog {
             new QTreeWidgetItem(properties, {QString(), tr("Window type"), Minimize2Tray::windowType(info)});
         typeItem->setData(0, Qt::UserRole, QStringLiteral("type"));
         typeItem->setCheckState(0, Qt::Checked);
+        for (int column = 0; column < 3; ++column)
+            typeItem->setToolTip(
+                column,
+                toolTipText(tr("Require the detected window type, such as a normal window or non-modal dialog.")));
         properties->setColumnWidth(0, 48);
         properties->setColumnWidth(1, 210);
         properties->header()->setSectionResizeMode(2, QHeaderView::Stretch);
@@ -863,17 +1012,26 @@ class RuleDialog : public QDialog {
         layout->addWidget(plainLabel(tr(
             "Window roles can distinguish main windows from separate editors. Titles may change as you use the app.")));
         auto children = new QCheckBox(tr("Keep child windows and dialogs visible"));
+        children->setObjectName(QStringLiteral("detectedKeepChildrenVisible"));
+        children->setToolTip(
+            toolTipText(tr("Exclude child windows and dialogs from this rule. Modal dialogs remain protected even "
+                           "when this is unchecked.")));
         children->setChecked(true);
         layout->addWidget(children);
         auto error = plainLabel(QString());
         layout->addWidget(error);
         auto buttons = new QDialogButtonBox(QDialogButtonBox::Cancel);
+        buttons->button(QDialogButtonBox::Cancel)
+            ->setToolTip(toolTipText(tr("Keep the rule’s current properties and close this detection result.")));
         auto another = buttons->addButton(tr("Detect another window…"), QDialogButtonBox::ActionRole);
+        another->setToolTip(toolTipText(tr("Pick a different window instead of using these detected properties.")));
         connect(another, &QPushButton::clicked, dialog, [this, dialog]() {
             dialog->reject();
             detectWindow();
         });
         auto use = buttons->addButton(tr("Use selected properties"), QDialogButtonBox::AcceptRole);
+        use->setToolTip(
+            toolTipText(tr("Copy the checked properties into the rule editor. Review and save the rule there.")));
         layout->addWidget(buttons);
         connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
         connect(use, &QPushButton::clicked, dialog, [this, dialog, properties, children, error, info]() {
@@ -926,6 +1084,7 @@ class RuleDialog : public QDialog {
     QCheckBox *m_startupProtection;
     QComboBox *m_minimize;
     QCheckBox *m_close;
+    QCheckBox *m_quitOnLogout;
     QComboBox *m_type;
     QCheckBox *m_children;
     QMap<QString, Condition> m_conditions;
@@ -955,6 +1114,8 @@ class Minimize2TrayConfig : public KCModule {
         outer->addWidget(m_error);
         auto reload = makeButton(tr("Reload settings"), QStringLiteral("view-refresh"));
         reload->setObjectName(QStringLiteral("reloadSettings"));
+        reload->setToolTip(
+            toolTipText(tr("Reload saved rules and options, discarding pending edits in this configuration window.")));
         outer->addWidget(reload);
         reload->hide();
         m_reload = reload;
@@ -970,6 +1131,9 @@ class Minimize2TrayConfig : public KCModule {
         rulesLayout->addWidget(plainLabel(tr("Choose an app window once. Fine-tune which windows are included.")));
         m_search = new QLineEdit;
         m_search->setObjectName(QStringLiteral("ruleSearch"));
+        m_search->setToolTip(
+            toolTipText(tr("Filter the list by rule names, descriptions or matching properties. Filtering does "
+                           "not change which rules are enabled.")));
         m_search->setClearButtonEnabled(true);
         m_search->setAccessibleName(tr("Search rules"));
         m_search->setPlaceholderText(tr("Search names, descriptions, apps, classes, roles or window titles…"));
@@ -978,8 +1142,13 @@ class Minimize2TrayConfig : public KCModule {
         auto toolbar = new QHBoxLayout;
         auto add = makeButton(tr("Add rule…"), QStringLiteral("list-add"));
         add->setObjectName(QStringLiteral("addRule"));
+        add->setToolTip(
+            toolTipText(tr("Create a window rule. Use Detect in the editor to choose an application window.")));
         auto text = makeButton(tr("View as text…"), QStringLiteral("document-properties"));
         text->setObjectName(QStringLiteral("viewRulesText"));
+        text->setToolTip(
+            toolTipText(tr("Inspect, copy or save rule JSON, including disabled rules and pending edits. Full "
+                           "configuration export is also available there.")));
         toolbar->addWidget(add);
         toolbar->addWidget(text);
         toolbar->addStretch();
@@ -989,10 +1158,16 @@ class Minimize2TrayConfig : public KCModule {
         m_sort->addItem(tr("Title (A–Z)"), QStringLiteral("title"));
         m_sort->addItem(tr("Created (newest first)"), QStringLiteral("newest"));
         m_sort->addItem(tr("Created (oldest first)"), QStringLiteral("oldest"));
-        m_sort->setToolTip(tr("Older rules have no recorded creation time and follow dated rules in their stored order."));
+        m_sort->setToolTip(
+            toolTipText(tr("Choose title or creation-time order for the list. The choice is remembered between "
+                           "sessions. Older rules with unknown dates follow dated rules in their stored order.")));
         sortLabel->setBuddy(m_sort);
         toolbar->addWidget(sortLabel);
         toolbar->addWidget(m_sort);
+        comboToolTips(m_sort,
+                      {tr("Sort rule names alphabetically, using natural number order."),
+                       tr("Show the most recently created rules first. Rules with unknown dates follow dated rules."),
+                       tr("Show the earliest created rules first. Rules with unknown dates follow dated rules.")});
         m_count = plainLabel(QString());
         m_count->setWordWrap(false);
         toolbar->addWidget(m_count);
@@ -1017,6 +1192,8 @@ class Minimize2TrayConfig : public KCModule {
         rulesLayout->addWidget(m_empty);
         m_undo = makeButton(tr("Undo delete"), QStringLiteral("edit-undo"));
         m_undo->setObjectName(QStringLiteral("undoDelete"));
+        m_undo->setToolTip(toolTipText(
+            tr("Restore the most recently deleted rule. Available until Apply or OK saves the deletions.")));
         m_undo->hide();
         rulesLayout->addWidget(m_undo);
         rulesLayout->addWidget(
@@ -1027,19 +1204,29 @@ class Minimize2TrayConfig : public KCModule {
         auto trayLayout = new QVBoxLayout(trayPage);
         m_dot = new QCheckBox(tr("Counter as dot"));
         m_dot->setObjectName(QStringLiteral("countUseDot"));
+        m_dot->setToolTip(
+            toolTipText(tr("Show a dot instead of a number when an application publishes a positive Unity counter. "
+                           "Notification activity does not supply these counts.")));
         trayLayout->addWidget(m_dot);
         auto limitRow = new QFormLayout;
         m_limit = new QSpinBox;
         m_limit->setObjectName(QStringLiteral("countDisplayLimit"));
+        m_limit->setToolTip(
+            toolTipText(tr("Largest counter number to display. Higher counts use a plus sign, such as 99+. This "
+                           "changes the display, not the application’s count.")));
         m_limit->setRange(1, 9999);
         limitRow->addRow(tr("Counter display limit:"), m_limit);
         trayLayout->addLayout(limitRow);
         trayLayout->addWidget(plainLabel(tr("Larger counts are shown with a plus sign, for example 99+.")));
         m_hide = new QCheckBox(tr("Hide on minimize"));
         m_hide->setObjectName(QStringLiteral("hideOnMinimize"));
+        m_hide->setToolTip(
+            toolTipText(tr("Default minimize behaviour for rules using the global setting and manually pinned "
+                           "windows without a matching rule. A rule’s On or Off setting overrides this default.")));
         trayLayout->addWidget(m_hide);
-        trayLayout->addWidget(plainLabel(tr("Default for rules using ‘Use global setting’ and for manually pinned windows "
-                                            "without a matching rule. Per-rule On or Off overrides this default.")));
+        trayLayout->addWidget(
+            plainLabel(tr("Default for rules using ‘Use global setting’ and for manually pinned windows "
+                          "without a matching rule. Per-rule On or Off overrides this default.")));
         trayLayout->addStretch();
         m_tabs->addTab(trayPage, QIcon::fromTheme(QStringLiteral("preferences-desktop-notification")),
                        tr("Tray && badges"));
@@ -1047,6 +1234,8 @@ class Minimize2TrayConfig : public KCModule {
         auto advancedLayout = new QVBoxLayout(advancedPage);
         m_debug = new QCheckBox(tr("Enable debug logging"));
         m_debug->setObjectName(QStringLiteral("debugEnabled"));
+        m_debug->setToolTip(toolTipText(
+            tr("Write diagnostic messages to KWin’s logs for troubleshooting. Leave off during normal use.")));
         advancedLayout->addWidget(m_debug);
         advancedLayout->addWidget(plainLabel(tr("Minimize2Tray, System Settings, configuration hosts, modal dialogs "
                                                 "and system surfaces are protected from hiding.")));
@@ -1055,10 +1244,11 @@ class Minimize2TrayConfig : public KCModule {
         auto backupActions = new QHBoxLayout;
         auto import = makeButton(tr("Import configuration…"), QStringLiteral("document-import"));
         import->setObjectName(QStringLiteral("importConfiguration"));
-        import->setToolTip(tr("Choose rules, options or both from a Minimize2Tray backup. Review before Apply or OK."));
+        import->setToolTip(
+            toolTipText(tr("Choose rules, options or both from a Minimize2Tray backup. Review before Apply or OK.")));
         auto exportConfig = makeButton(tr("Export configuration…"), QStringLiteral("document-export"));
         exportConfig->setObjectName(QStringLiteral("exportConfiguration"));
-        exportConfig->setToolTip(tr("Back up all rules, options and sorting, including pending edits."));
+        exportConfig->setToolTip(toolTipText(tr("Back up all rules, options and sorting, including pending edits.")));
         backupActions->addWidget(import);
         backupActions->addWidget(exportConfig);
         backupActions->addStretch();
@@ -1081,7 +1271,10 @@ class Minimize2TrayConfig : public KCModule {
         auto editAction = new QAction(tr("Edit selected rule…"), m_list);
         editAction->setShortcut(Qt::Key_F2);
         editAction->setShortcutContext(Qt::WidgetShortcut);
+        editAction->setToolTip(toolTipText(tr("Open the selected rule’s matching properties and actions.")));
         auto deleteAction = new QAction(tr("Delete selected rule"), m_list);
+        deleteAction->setToolTip(
+            toolTipText(tr("Delete the selected rule. Undo delete is available until Apply or OK.")));
         deleteAction->setShortcut(QKeySequence::Delete);
         deleteAction->setShortcutContext(Qt::WidgetShortcut);
         m_list->addActions({editAction, deleteAction});
@@ -1249,6 +1442,7 @@ class Minimize2TrayConfig : public KCModule {
                                   : previousSchema == QJsonValue(2) ? QStringLiteral("rulesSchema2Backup")
                                   : previousSchema == QJsonValue(3) ? QStringLiteral("rulesSchema3Backup")
                                   : previousSchema == QJsonValue(4) ? QStringLiteral("rulesSchema4Backup")
+                                  : previousSchema == QJsonValue(5) ? QStringLiteral("rulesSchema5Backup")
                                                                     : QString();
         if (!backupKey.isEmpty() && !group.hasKey(backupKey)) {
             if (group.isEntryImmutable(backupKey)) {
@@ -1335,16 +1529,24 @@ class Minimize2TrayConfig : public KCModule {
         dialog->setAttribute(Qt::WA_DeleteOnClose);
         dialog->setWindowModality(Qt::WindowModal);
         auto layout = new QVBoxLayout(dialog);
-        layout->addWidget(plainLabel(
-            tr("Backup rules: %1 · Current rules: %2").arg(backup.rules.size()).arg(m_model->rowCount())));
+        layout->addWidget(
+            plainLabel(tr("Backup rules: %1 · Current rules: %2").arg(backup.rules.size()).arg(m_model->rowCount())));
         auto rules = new QCheckBox(tr("Import window rules"));
         rules->setObjectName(QStringLiteral("importRules"));
+        rules->setToolTip(toolTipText(tr("Import rules using Add or Replace below. Leave unchecked to keep the current "
+                                         "rule list and its pending edits.")));
         rules->setChecked(true);
         layout->addWidget(rules);
         auto mode = new QComboBox;
         mode->setObjectName(QStringLiteral("importRuleMode"));
+        mode->setToolTip(toolTipText(tr("Add keeps current rules and skips identical copies. Replace discards the "
+                                        "current rule list and its pending edits in favour of the backup’s rules.")));
         mode->addItem(tr("Add to current rules"));
         mode->addItem(tr("Replace current rules"));
+        comboToolTips(
+            mode,
+            {tr("Keep current rules and add new or changed rules; skip identical copies."),
+             tr("Replace the editor’s current rule list with the backup’s rules. Apply or OK saves the replacement.")});
         auto form = new QFormLayout;
         form->addRow(tr("Rules:"), mode);
         layout->addLayout(form);
@@ -1353,6 +1555,8 @@ class Minimize2TrayConfig : public KCModule {
         layout->addWidget(duplicates);
         auto options = new QCheckBox(tr("Import application options (including sorting)"));
         options->setObjectName(QStringLiteral("importOptions"));
+        options->setToolTip(toolTipText(tr("Replace the four application options and sorting with values from the "
+                                           "backup. Leave unchecked to keep current values and pending edits.")));
         layout->addWidget(options);
         layout->addWidget(plainLabel(tr("Selected options replace current options. Unselected items keep their current "
                                         "values, including pending edits. Global shortcuts are not included.")));
@@ -1362,8 +1566,12 @@ class Minimize2TrayConfig : public KCModule {
         errorLabel->setObjectName(QStringLiteral("importError"));
         layout->addWidget(errorLabel);
         auto buttons = new QDialogButtonBox(QDialogButtonBox::Cancel);
+        buttons->button(QDialogButtonBox::Cancel)
+            ->setToolTip(toolTipText(tr("Close without importing anything or changing pending edits.")));
         auto import = buttons->addButton(tr("Import"), QDialogButtonBox::ActionRole);
         import->setObjectName(QStringLiteral("applyConfigurationImport"));
+        import->setToolTip(toolTipText(
+            tr("Load the selected backup items into the editor for review. Apply or OK on the main page saves them.")));
         import->setAutoDefault(false);
         buttons->button(QDialogButtonBox::Cancel)->setDefault(true);
         layout->addWidget(buttons);
@@ -1463,6 +1671,7 @@ class Minimize2TrayConfig : public KCModule {
                                   : tr("Stored rule text could not be parsed. It is shown unchanged for recovery.")));
         auto text = new QPlainTextEdit;
         text->setObjectName(QStringLiteral("rulesJson"));
+        text->setToolTip(toolTipText(tr("Read-only JSON for every rule, including disabled rules and pending edits. If stored rules are invalid, their original text is shown for recovery.")));
         text->setReadOnly(true);
         text->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
         text->setLineWrapMode(QPlainTextEdit::NoWrap);
@@ -1472,11 +1681,15 @@ class Minimize2TrayConfig : public KCModule {
         auto error = plainLabel(QString());
         layout->addWidget(error);
         auto buttons = new QDialogButtonBox(QDialogButtonBox::Close);
+        buttons->button(QDialogButtonBox::Close)->setToolTip(toolTipText(tr("Return to the configuration editor.")));
         auto copy = buttons->addButton(tr("Copy all"), QDialogButtonBox::ActionRole);
+        copy->setToolTip(toolTipText(tr("Copy all the rule JSON shown here to the clipboard.")));
         auto save = buttons->addButton(tr("Save a copy…"), QDialogButtonBox::ActionRole);
+        save->setToolTip(toolTipText(tr("Save only the rule text shown here. For an importable backup of rules and "
+                                        "options, choose Export configuration.")));
         auto exportConfig = buttons->addButton(tr("Export configuration…"), QDialogButtonBox::ActionRole);
         exportConfig->setObjectName(QStringLiteral("exportTextConfiguration"));
-        exportConfig->setToolTip(tr("Back up these rules together with all options and sorting."));
+        exportConfig->setToolTip(toolTipText(tr("Back up these rules together with all options and sorting.")));
         connect(exportConfig, &QPushButton::clicked, dialog,
                 [this, dialog, error]() { exportConfiguration(dialog, error); });
         layout->addWidget(buttons);
@@ -1547,6 +1760,18 @@ class Minimize2TrayConfig : public KCModule {
         if (!host || host->property("minimize2traySaveGuard").toBool())
             return;
         host->setProperty("minimize2traySaveGuard", true);
+        for (auto box : host->findChildren<QDialogButtonBox *>(QString(), Qt::FindDirectChildrenOnly)) {
+            const QList<QPair<QDialogButtonBox::StandardButton, QString>> help{
+                {QDialogButtonBox::Apply, tr("Save pending rules and options and apply them to Minimize2Tray.")},
+                {QDialogButtonBox::Ok, tr("Save pending changes and close the configuration window.")},
+                {QDialogButtonBox::Cancel, tr("Close without applying pending rule or option edits.")},
+                {QDialogButtonBox::RestoreDefaults,
+                 tr("Set pending rules and options to defaults. Apply or OK saves the changes.")},
+                {QDialogButtonBox::Reset, tr("Reload saved rules and options, discarding pending edits.")}};
+            for (const auto &entry : help)
+                if (auto button = box->button(entry.first))
+                    button->setToolTip(toolTipText(entry.second));
+        }
         const bool deleteOnClose = host->testAttribute(Qt::WA_DeleteOnClose);
         // kcmshell6 normally quits when its last window closes. Keep its event
         // loop alive until the deferred save check can reopen a failed save.

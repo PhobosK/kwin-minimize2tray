@@ -36,6 +36,16 @@ Item {
         onWindowsRequested: scriptConfig.setWindows(Workspace.windows.map(window => Utils.windowInfo(window)))
     }
 
+    Connections {
+        target: scriptConfig
+        // An older native plugin may still be resident until the next session.
+        ignoreUnknownSignals: true
+        function onSessionClosing() {
+            if (typeof scriptConfig.terminateSessionWindows === "function")
+                scriptConfig.terminateSessionWindows(Workspace.windows);
+        }
+    }
+
     function reloadConfig() {
         Utils.cancelAllStartupProtection();
         Utils.cancelWindowActivation();

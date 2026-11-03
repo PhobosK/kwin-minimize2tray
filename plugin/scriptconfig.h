@@ -7,9 +7,11 @@
 #include <QPointer>
 #include <QTimer>
 #include <QVariantMap>
+#include <memory>
 
 class QDialog;
 class QProcess;
+class SessionTermination;
 
 class ScriptConfig : public QObject {
     Q_OBJECT
@@ -26,6 +28,7 @@ class ScriptConfig : public QObject {
     Q_INVOKABLE void configure();
     Q_INVOKABLE bool isProtected(const QVariantMap &window) const;
     Q_INVOKABLE QStringList matchingRules(const QVariantMap &window) const;
+    Q_INVOKABLE void terminateSessionWindows(const QVariantList &windows);
     Q_INVOKABLE QVariantMap matchingBehavior(const QVariantMap &window) const;
     Q_INVOKABLE void setWindows(const QVariantList &windows) { m_windows = windows; }
 
@@ -33,6 +36,7 @@ class ScriptConfig : public QObject {
     Q_SCRIPTABLE QVariantList windows();
 
   signals:
+    void sessionClosing();
     void valuesChanged();
     void windowsRequested();
 
@@ -40,6 +44,7 @@ class ScriptConfig : public QObject {
     void reload();
     void showDialog(QDialog *dialog, const QString &role);
     KConfig m_config;
+    std::unique_ptr<SessionTermination> m_sessionTermination;
     QPointer<QDialog> m_aboutDialog;
     QPointer<QDialog> m_configDialog; // Launch errors only; the editor runs in kcmshell6.
     QPointer<QProcess> m_configProcess;

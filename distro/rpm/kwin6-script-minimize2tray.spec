@@ -22,6 +22,8 @@ Source0:        %{url}/archive/refs/tags/v%{version}.tar.gz#/%{name}-PhobosK-v%{
 
 BuildRequires:  cmake >= 3.19
 BuildRequires:  gcc-c++
+BuildRequires:  linux-glibc-devel >= 6.13
+BuildRequires:  cmake(KWin) >= 6.8
 BuildRequires:  kf6-extra-cmake-modules >= 6.0.0
 BuildRequires:  cmake(Qt6DBus) >= 6.6.0
 BuildRequires:  cmake(Qt6Gui) >= 6.6.0

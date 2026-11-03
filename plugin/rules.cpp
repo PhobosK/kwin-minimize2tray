@@ -67,13 +67,14 @@ QVariantMap newRule() {
                                                 {QStringLiteral("startInTray"), true},
                                                 {QStringLiteral("minimizeToTray"), QStringLiteral("inherit")},
                                                 {QStringLiteral("closeToTray"), false},
-                                                {QStringLiteral("startupProtection"), false}}},
+                                                {QStringLiteral("startupProtection"), false},
+                                                {QStringLiteral("terminateOnLogout"), false}}},
         {QStringLiteral("match"), QVariantMap{{QStringLiteral("windowTypes"), QStringList{QStringLiteral("normal")}},
                                               {QStringLiteral("includeChildren"), false}}}};
 }
 
 QString encodeRules(const QVariantList &rules, bool indented) {
-    return QString::fromUtf8(QJsonDocument(QJsonObject{{QStringLiteral("schemaVersion"), 5},
+    return QString::fromUtf8(QJsonDocument(QJsonObject{{QStringLiteral("schemaVersion"), 6},
                                                        {QStringLiteral("rules"), QJsonArray::fromVariantList(rules)}})
                                  .toJson(indented ? QJsonDocument::Indented : QJsonDocument::Compact));
 }
@@ -113,7 +114,7 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
     const auto schema = root.value(QStringLiteral("schemaVersion"));
     if (!onlyKeys(root, {QStringLiteral("schemaVersion"), QStringLiteral("rules")}) ||
         (schema != QJsonValue(1) && schema != QJsonValue(2) && schema != QJsonValue(3) &&
-         schema != QJsonValue(4) && schema != QJsonValue(5)) ||
+         schema != QJsonValue(4) && schema != QJsonValue(5) && schema != QJsonValue(6)) ||
         !root.value(QStringLiteral("rules")).isArray()) {
         return invalid(text("Unsupported rule format or schema version."));
     }
@@ -133,7 +134,7 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
                            QStringLiteral("enabled"), QStringLiteral("match")};
     if (schema != QJsonValue(1))
         ruleKeys.insert(QStringLiteral("behavior"));
-    if (schema == QJsonValue(5))
+    if (schema == QJsonValue(5) || schema == QJsonValue(6))
         ruleKeys.insert(QStringLiteral("createdAt"));
     for (const auto &value : array) {
         const auto rule = value.toObject();
@@ -147,7 +148,7 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
             !rule.value(QStringLiteral("enabled")).isBool() || !rule.value(QStringLiteral("match")).isObject()) {
             return invalid(text("A rule has missing, invalid or duplicate fields."));
         }
-        if (schema == QJsonValue(5)) {
+        if (schema == QJsonValue(5) || schema == QJsonValue(6)) {
             const auto created = rule.value(QStringLiteral("createdAt"));
             const auto date = QDateTime::fromString(created.toString(), Qt::ISODateWithMs);
             // Null means the creation time of an older rule is unknown. Otherwise
@@ -164,8 +165,10 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
                 ? QSet<QString>{QStringLiteral("startInTray")}
                 : QSet<QString>{QStringLiteral("autoPin"), QStringLiteral("startInTray"),
                                 QStringLiteral("minimizeToTray"), QStringLiteral("closeToTray")};
-            if (schema == QJsonValue(4) || schema == QJsonValue(5))
+            if (schema == QJsonValue(4) || schema == QJsonValue(5) || schema == QJsonValue(6))
                 keys.insert(QStringLiteral("startupProtection"));
+            if (schema == QJsonValue(6))
+                keys.insert(QStringLiteral("terminateOnLogout"));
             if (!behavior.isObject() || !onlyKeys(object, keys) ||
                 !object.value(QStringLiteral("startInTray")).isBool()) {
                 return invalid(text("A rule has missing or invalid behavior settings."));
@@ -179,7 +182,7 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
                   object.value(QStringLiteral("startInTray")).toBool()))) {
                 return invalid(text("A rule has invalid action settings or conflicting startup actions."));
             }
-            if ((schema == QJsonValue(4) || schema == QJsonValue(5)) &&
+            if ((schema == QJsonValue(4) || schema == QJsonValue(5) || schema == QJsonValue(6)) &&
                 (!object.value(QStringLiteral("startupProtection")).isBool() ||
                  (object.value(QStringLiteral("startupProtection")).toBool() &&
                   !object.value(QStringLiteral("startInTray")).toBool()))) {
@@ -229,6 +232,9 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
         if (!hasIdentity) {
             return invalid(text("Select an application ID, window class or instance for each rule."));
         }
+        if (schema == QJsonValue(6) &&
+            !rule.value(QStringLiteral("behavior")).toObject().value(QStringLiteral("terminateOnLogout")).isBool())
+            return invalid(text("Quit on logout must be a boolean setting."));
         auto decoded = rule.toVariantMap();
         if (schema == QJsonValue(1) || schema == QJsonValue(2)) {
             // Upgrade in memory; leave the stored document intact until Apply/OK.
@@ -244,7 +250,12 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
             behavior.insert(QStringLiteral("startupProtection"), false);
             decoded.insert(QStringLiteral("behavior"), behavior);
         }
-        if (schema != QJsonValue(5))
+        if (schema != QJsonValue(6)) {
+            auto behavior = decoded.value(QStringLiteral("behavior")).toMap();
+            behavior.insert(QStringLiteral("terminateOnLogout"), false);
+            decoded.insert(QStringLiteral("behavior"), behavior);
+        }
+        if (schema != QJsonValue(5) && schema != QJsonValue(6))
             decoded.insert(QStringLiteral("createdAt"), QVariant());
         result.append(decoded);
     }
@@ -462,6 +473,8 @@ QString ruleSummary(const QVariantMap &rule) {
                                                        : text("Minimize to tray: use global setting"));
     parts.append(behavior.value(QStringLiteral("closeToTray")).toBool() ? text("Close to tray: optional shortcut")
                                                                       : text("Close to tray: off"));
+    if (behavior.value(QStringLiteral("terminateOnLogout")).toBool())
+        parts.append(text("Quit on logout when closing is disabled"));
     return parts.join(QStringLiteral(" · "));
 }
 

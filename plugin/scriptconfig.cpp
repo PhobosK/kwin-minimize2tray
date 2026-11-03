@@ -1,11 +1,16 @@
 #include "scriptconfig.h"
 #include "rules.h"
+#include "sessionprocess.h"
+#include "sessiontermination.h"
 
 #include <KAboutApplicationDialog>
 #include <KAboutData>
 #include <KPluginMetaData>
 #include <KConfigGroup>
 #include <QCoreApplication>
+#include <QGuiApplication>
+#include <QJsonObject>
+#include <QPluginLoader>
 #include <QDBusConnection>
 #include <QDBusMessage>
 #include <QDBusPendingCallWatcher>
@@ -16,6 +21,7 @@
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QStandardPaths>
+#include <algorithm>
 
 ScriptConfig::ScriptConfig(QObject *parent) : QObject(parent), m_config(QStringLiteral("kwinrc")) {
     m_elapsed.start();
@@ -58,7 +64,29 @@ void ScriptConfig::reload() {
     if (!m_hasRulesSource || !group.hasKey("rules") ||
         group.readEntry("rules", QString()) != m_rulesSource) {
         const auto decoded = Minimize2Tray::readRules(m_config, error);
-        if (error.isEmpty() || !m_values.contains(QStringLiteral("rules"))) rules = decoded;
+        if (error.isEmpty() || !m_values.contains(QStringLiteral("rules")))
+            rules = decoded;
+        const bool terminationEnabled =
+            error.isEmpty() && std::any_of(rules.cbegin(), rules.cend(), [](const auto &value) {
+                const auto rule = value.toMap();
+                const auto behavior = rule.value(QStringLiteral("behavior")).toMap();
+                return rule.value(QStringLiteral("enabled")).toBool() &&
+                       behavior.value(QStringLiteral("terminateOnLogout")).toBool();
+            });
+        if (!terminationEnabled) {
+            m_sessionTermination.reset();
+        } else if (!m_sessionTermination && QGuiApplication::platformName() == QLatin1String("org.kde.kwin.qpa")) {
+            const auto bus = QDBusConnection::sessionBus();
+            auto source = bus.objectRegisteredAt(QStringLiteral("/Effects"));
+            auto notifications = bus.objectRegisteredAt(QStringLiteral("/Session"));
+            m_sessionTermination = std::make_unique<SessionTermination>(source, notifications, this);
+            if (m_sessionTermination->available())
+                connect(m_sessionTermination.get(), &SessionTermination::closingRequested, this,
+                        &ScriptConfig::sessionClosing);
+            else
+                qWarning()
+                    << "Minimize2Tray: KWin session-closing state is unavailable; logout termination is disabled";
+        }
         m_hasRulesSource = group.hasKey("rules");
         m_rulesSource = group.readEntry("rules", QString());
     }
@@ -74,6 +102,34 @@ void ScriptConfig::reload() {
         m_values = values;
         Q_EMIT valuesChanged();
     }
+}
+
+void ScriptConfig::terminateSessionWindows(const QVariantList &windows) {
+    if (!m_sessionTermination || !m_sessionTermination->closing())
+        return;
+    // Recheck persisted intent at the last possible moment, including a pending
+    // watcher reload. Malformed rules never authorize process termination.
+    KConfig config(QStringLiteral("kwinrc"));
+    QString error;
+    const auto rules = Minimize2Tray::readRules(config, error);
+    if (!error.isEmpty()) {
+        qWarning() << "Minimize2Tray: skipping logout termination because the current rules are invalid";
+        return;
+    }
+    QPluginLoader loader(sessionProcessPluginPath());
+    const auto metadata = loader.metaData();
+    if (metadata.value(QStringLiteral("IID")) != QJsonValue(QStringLiteral(SessionProcess_iid)) ||
+        metadata.value(QStringLiteral("MetaData")).toObject().value(QStringLiteral("KWinVersion")) !=
+            QJsonValue(QCoreApplication::applicationVersion())) {
+        qWarning() << "Minimize2Tray: logout termination needs an adapter built for this KWin version";
+        return;
+    }
+    auto process = qobject_cast<SessionProcess *>(loader.instance());
+    if (!process) {
+        qWarning() << "Minimize2Tray: could not load the logout process adapter:" << loader.errorString();
+        return;
+    }
+    m_sessionTermination->terminate(windows, rules, *process);
 }
 
 bool ScriptConfig::isProtected(const QVariantMap &window) const { return Minimize2Tray::protectedWindow(window); }
