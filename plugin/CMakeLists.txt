@@ -57,4 +57,5 @@ int main() { pidfd_info info{}; unsigned long request = PIDFD_GET_INFO; int opti
     endif()
 endif()
 
+target_compile_definitions(${PLUGIN_NAME} PRIVATE MINIMIZE2TRAY_HAS_SESSION_PROCESS=$<TARGET_EXISTS:sessionprocess>)
 target_compile_definitions(kcm_minimize2tray PRIVATE MINIMIZE2TRAY_HAS_SESSION_PROCESS=$<TARGET_EXISTS:sessionprocess>)

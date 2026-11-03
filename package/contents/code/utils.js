@@ -1,3 +1,7 @@
+function debugLog(message, windowId = "") {
+    if (debugEnabled) console.debug("Minimize2Tray:", message, windowId);
+}
+
 function isValidWindow(window) {
     return window && !isProtectedWindow(window) && window.minimizable && window.normalWindow &&
         !window.dialog && !window.modal && !window.specialWindow &&
@@ -117,6 +121,7 @@ function addTrayIcon(window, automatic = false) {
     trayItem.requestConfigure.connect(() => scriptConfig.configure());
     trayIcons[windowId] = trayItem;
     if (automatic) automaticPins[windowId] = true;
+    debugLog(automatic ? "added automatic tray icon" : "added manual tray icon", windowId);
     return true;
 }
 
@@ -130,9 +135,11 @@ function removeTrayIcon(window) {
     delete trayIcons[windowId];
     delete automaticPins[windowId];
     trayItem.destroy();
+    debugLog("removed tray icon", windowId);
 }
 
 function restoreManagedWindows() {
+    debugLog("restoring managed windows on unload");
     shuttingDown = true;
     cancelAllStartupProtection();
     reconcileTimer.stop();
@@ -264,6 +271,7 @@ function hideWindow(window, automatic = false, reason = "manual") {
         hiddenWindows[windowId].automatic = false;
         hiddenWindows[windowId].reason = reason;
     }
+    debugLog("hide requested: " + reason, windowId);
     window.minimized = true;
     enforceTrayManagedState(window);
     return true;
@@ -275,6 +283,7 @@ function releaseHiddenWindow(window, restore) {
     const hidden = hiddenWindows[windowId];
     if (!hidden) return;
     delete hiddenWindows[windowId];
+    debugLog("released hidden-window state", windowId);
     window.skipTaskbar = hidden.skipTaskbar;
     window.skipPager = hidden.skipPager;
     window.skipSwitcher = hidden.skipSwitcher;
@@ -337,6 +346,7 @@ function cancelWindowActivation() {
 }
 
 function activateWindowInPlace(window) {
+    debugLog("show requested", window.internalId);
     cancelStartupProtection(window.internalId);
     pendingActivation = {windowId: window.internalId, window: window,
                          started: scriptConfig.monotonicMilliseconds(), activity: ""};
@@ -516,6 +526,10 @@ function reconcileWindows() {
             delete automaticDecisions[windowId];
             return;
         }
+        if (debugEnabled && (behavior.matched || previous.matched || windowId in trayIcons) &&
+            JSON.stringify(previous) !== JSON.stringify(behavior)) {
+            debugLog("rule behavior changed: " + JSON.stringify(behavior), windowId);
+        }
         let hidden = hiddenWindows[windowId];
         if (!behavior.matched) {
             if (windowId in automaticPins) {
@@ -524,6 +538,9 @@ function reconcileWindows() {
             } else if (hidden && hidden.automatic) {
                 if (hidden.reason === "minimize" && !behavior.minimizeToTray) releaseHiddenWindow(window, false);
                 else if (hidden.reason === "close") releaseHiddenWindow(window, true);
+            } else if (windowId in trayIcons && window.minimized && behavior.minimizeToTray && !hidden) {
+                // Apply the global setting to existing manual pins too.
+                hideWindow(window, true, "minimize");
             }
             delete automaticDecisions[windowId];
             return;

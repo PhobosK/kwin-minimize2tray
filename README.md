@@ -119,7 +119,9 @@ Overlapping rules combine actions: Start in tray wins over pin-only; Minimize On
 
 **Show** prevents startup re-hiding; later minimize/close actions can hide again. **Unpin** suppresses automatic actions until the window stops matching all rules or is manually pinned again. Removing the last matching rule restores automatic tray-hidden windows; manual pins remain independent. Tray Quit closes only its associated window.
 
-Existing settings migrate with backups on Apply; startup retry defaults Off. Invalid rules are reported and retained. **View as text** shows read-only rule JSON and offers **Export configuration…**. Export backs up all rules, options and sorting, including pending edits, to a JSON file. **Import configuration…** lets you choose rules, options or both. Add rules to the current list or replace it; identical copies are skipped when adding. Imported options replace current options and sorting; unselected items stay unchanged. Choose Apply/OK to save, or Cancel to discard. Global shortcut assignments and unrelated KWin settings are not included.
+**Enable debug logging** records rule behavior changes and tray actions in KWin’s logs, identified by window IDs.
+
+Legacy class-list settings are backed up and migrated automatically when the script or configuration editor first loads; Cancel does not undo this migration. Older rule schemas are upgraded with backups on Apply/OK. Startup retry defaults Off. Invalid rules are reported and retained. **View as text** shows read-only rule JSON and offers **Export configuration…**. Export backs up all rules, options and sorting, including pending edits, to a JSON file. **Import configuration…** lets you choose rules, options or both. Add rules to the current list or replace it; identical copies are skipped when adding. Imported options replace current options and sorting; unselected items stay unchanged. Choose Apply/OK to save, or Cancel to discard. Global shortcut assignments and unrelated KWin settings are not included.
 
 ## Acknowledgements
 

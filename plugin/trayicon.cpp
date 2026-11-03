@@ -1,6 +1,7 @@
 #include "trayicon.h"
 #include <KService>
 #include <KSycoca>
+#include <kstatusnotifieritem_version.h>
 #include <QAction>
 #include <QDBusArgument>
 #include <QDBusConnection>
@@ -402,11 +403,13 @@ void TrayIcon::initializeTrayIcon() {
     quitAction->setToolTip(tr("Close this window. Other windows of the application may remain open."));
     connect(quitAction, &QAction::triggered, this, [this]() { emit requestClose(m_windowId); }, Qt::QueuedConnection);
 
+#if KSTATUSNOTIFIERITEM_VERSION >= QT_VERSION_CHECK(6, 5, 0)
     connect(trayIcon, &KStatusNotifierItem::quitRequested, this, [this]() {
         // Abort synchronously: the framework otherwise quits the host after this signal.
         trayIcon->abortQuit();
         QTimer::singleShot(0, this, [this]() { emit requestClose(m_windowId); });
     });
+#endif
 
     // Return from the tray D-Bus method before touching compositor window state.
     connect(trayIcon, &KStatusNotifierItem::activateRequested, this,

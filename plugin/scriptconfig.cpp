@@ -67,7 +67,8 @@ void ScriptConfig::reload() {
         if (error.isEmpty() || !m_values.contains(QStringLiteral("rules")))
             rules = decoded;
         const bool terminationEnabled =
-            error.isEmpty() && std::any_of(rules.cbegin(), rules.cend(), [](const auto &value) {
+            MINIMIZE2TRAY_HAS_SESSION_PROCESS && error.isEmpty() &&
+            std::any_of(rules.cbegin(), rules.cend(), [](const auto &value) {
                 const auto rule = value.toMap();
                 const auto behavior = rule.value(QStringLiteral("behavior")).toMap();
                 return rule.value(QStringLiteral("enabled")).toBool() &&
@@ -105,7 +106,9 @@ void ScriptConfig::reload() {
 }
 
 void ScriptConfig::terminateSessionWindows(const QVariantList &windows) {
-    if (!m_sessionTermination || !m_sessionTermination->closing())
+    // A source upgrade can leave an older adapter beside this plugin. Only a
+    // build that includes its own adapter may use logout termination.
+    if (!MINIMIZE2TRAY_HAS_SESSION_PROCESS || !m_sessionTermination || !m_sessionTermination->closing())
         return;
     // Recheck persisted intent at the last possible moment, including a pending
     // watcher reload. Malformed rules never authorize process termination.
