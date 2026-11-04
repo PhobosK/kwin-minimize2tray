@@ -14,6 +14,11 @@ Hide windows to the system tray, similar to [KDocker](https://github.com/user-no
 > [!IMPORTANT]
 > Some Chromium/Electron applications need native Wayland mode for reliable hiding. Check their window type in KWin Debug Console and see the [Wayland notes](https://wiki.archlinux.org/title/Wayland#GUI_libraries).
 
+### A note about AI-assisted development
+
+This fork is largely developed with AI assistance ("vibe coding"), with features directed, reviewed, and tested by me. I'm a long-time KDE/Qt and open-source developer who simply doesn't have as much free time for coding as I used to.
+
+You can read more about why I chose this approach in [AI_DISCLOSURE.md](AI_DISCLOSURE.md).
 
 ## Features
 
