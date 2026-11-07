@@ -23,6 +23,8 @@ bool mergeConfigurationRules(const QVariantList &current, const QVariantList &in
     QSet<QByteArray> contents;
     auto content = [](QVariantMap rule) {
         rule.remove(QStringLiteral("id"));
+        // Creation metadata alone does not justify adding a duplicate rule.
+        rule.remove(QStringLiteral("autoCreated"));
         return QJsonDocument(QJsonObject::fromVariantMap(rule)).toJson(QJsonDocument::Compact);
     };
     for (const auto &value : result) {

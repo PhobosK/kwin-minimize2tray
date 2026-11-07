@@ -34,6 +34,7 @@ Item {
         id: scriptConfig
         onValuesChanged: root.reloadConfig()
         onWindowsRequested: scriptConfig.setWindows(Workspace.windows.map(window => Utils.windowInfo(window)))
+        onAutomaticRuleCreated: windowId => Utils.applyAutomaticRule(windowId)
     }
 
     Connections {
@@ -86,6 +87,14 @@ Item {
         text: "Close or hide window to tray (according to window rules)"
         sequence: ""
         onActivated: Utils.closeOrHideWindow(Workspace.activeWindow)
+    }
+
+    ShortcutHandler {
+        // Keep the action ID stable for existing shortcut assignments.
+        name: "Add automatic tray rule"
+        text: "Add tray rule…"
+        sequence: ""
+        onActivated: scriptConfig.addAutomaticRule()
     }
 
     Component.onCompleted: {

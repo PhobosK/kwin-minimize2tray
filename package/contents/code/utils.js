@@ -119,10 +119,21 @@ function addTrayIcon(window, automatic = false) {
     trayItem.requestUnpin.connect(unpinIcon);
     trayItem.requestAbout.connect(() => scriptConfig.showAbout());
     trayItem.requestConfigure.connect(() => scriptConfig.configure());
+    trayItem.requestAutomaticRule.connect(() => scriptConfig.addAutomaticRule());
     trayIcons[windowId] = trayItem;
     if (automatic) automaticPins[windowId] = true;
     debugLog(automatic ? "added automatic tray icon" : "added manual tray icon", windowId);
     return true;
+}
+
+function applyAutomaticRule(windowId) {
+    const window = getWindow(windowId);
+    if (shuttingDown || !window || isProtectedWindow(window)) return;
+    // This explicit user request supersedes Show/Unpin for this selected window.
+    delete automaticDecisions[windowId];
+    if (!(windowId in trayIcons) && !addTrayIcon(window, true)) return;
+    hideWindow(window, true, "startup");
+    scheduleWindow(window);
 }
 
 function removeTrayIcon(window) {
@@ -493,7 +504,8 @@ function windowInfo(window) {
         hasTransientParent: window.transient,
         modal: window.modal,
         specialWindow: window.specialWindow || window.appletPopup || window.splash,
-        minimizable: window.minimizable
+        minimizable: window.minimizable,
+        minimized: window.minimized
     };
 }
 

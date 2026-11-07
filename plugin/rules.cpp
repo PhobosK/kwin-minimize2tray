@@ -63,18 +63,107 @@ QVariantMap newRule() {
         {QStringLiteral("createdAt"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},
         {QStringLiteral("description"), QString()},
         {QStringLiteral("enabled"), true},
+        {QStringLiteral("autoCreated"), false},
         {QStringLiteral("behavior"), QVariantMap{{QStringLiteral("autoPin"), false},
-                                                {QStringLiteral("startInTray"), true},
-                                                {QStringLiteral("minimizeToTray"), QStringLiteral("inherit")},
-                                                {QStringLiteral("closeToTray"), false},
-                                                {QStringLiteral("startupProtection"), false},
-                                                {QStringLiteral("terminateOnLogout"), false}}},
+                                                 {QStringLiteral("startInTray"), true},
+                                                 {QStringLiteral("minimizeToTray"), QStringLiteral("inherit")},
+                                                 {QStringLiteral("closeToTray"), false},
+                                                 {QStringLiteral("startupProtection"), false},
+                                                 {QStringLiteral("terminateOnLogout"), false}}},
         {QStringLiteral("match"), QVariantMap{{QStringLiteral("windowTypes"), QStringList{QStringLiteral("normal")}},
                                               {QStringLiteral("includeChildren"), false}}}};
 }
 
+QVariantMap automaticRule(const QVariantMap &window, const QVariantMap &widerRule, const QVariantList &windows,
+                          QString &error) {
+    error.clear();
+    if (QUuid(window.value(QStringLiteral("uuid")).toString()).isNull()) {
+        error = text("The selected window is no longer available. Select it again.");
+        return {};
+    }
+    auto rule = newRule();
+    rule[QStringLiteral("autoCreated")] = true;
+    auto match = widerRule.isEmpty() ? rule.value(QStringLiteral("match")).toMap()
+                                     : widerRule.value(QStringLiteral("match")).toMap();
+    if (!widerRule.isEmpty()) {
+        auto enabled = widerRule;
+        enabled[QStringLiteral("enabled")] = true;
+        if (!matchFailure(enabled, window).isEmpty()) {
+            error = text("The selected window no longer matches the existing rule. Select it again.");
+            return {};
+        }
+    }
+    match[QStringLiteral("windowTypes")] = QStringList{windowType(window)};
+    match[QStringLiteral("includeChildren")] =
+        window.value(QStringLiteral("hasTransientParent")).toBool() || windowType(window) == QLatin1String("dialog");
+    for (const auto &key : {QStringLiteral("desktopFile"), QStringLiteral("resourceClass"),
+                            QStringLiteral("resourceName"), QStringLiteral("role")}) {
+        auto value = window.value(key).toString();
+        if (key == QLatin1String("desktopFile"))
+            value = desktopIdentity(value);
+        if (!value.isEmpty())
+            match[key] =
+                QVariantMap{{QStringLiteral("operator"), QStringLiteral("equals")}, {QStringLiteral("value"), value}};
+    }
+    rule[QStringLiteral("match")] = match;
+    auto behavior = rule.value(QStringLiteral("behavior")).toMap();
+    behavior[QStringLiteral("minimizeToTray")] = QStringLiteral("enabled");
+    rule[QStringLiteral("behavior")] = behavior;
+    auto identity = window.value(QStringLiteral("resourceClass")).toString();
+    if (identity.isEmpty())
+        identity = desktopIdentity(window.value(QStringLiteral("desktopFile")).toString());
+    if (identity.isEmpty())
+        identity = window.value(QStringLiteral("resourceName")).toString();
+    rule[QStringLiteral("title")] = identity.left(256);
+    auto overlaps = [&]() {
+        return std::any_of(windows.cbegin(), windows.cend(), [&](const auto &entry) {
+            const auto other = entry.toMap();
+            return other.value(QStringLiteral("uuid")) != window.value(QStringLiteral("uuid")) &&
+                   matchFailure(rule, other).isEmpty();
+        });
+    };
+    // Prefer stable roles. Exact titles are a fail-closed fallback for windows
+    // that expose no distinct role, rather than guessing a title substring.
+    const auto role = match.value(QStringLiteral("role")).toMap();
+    const bool needsTitle =
+        (!widerRule.isEmpty() &&
+         (role.isEmpty() || widerRule.value(QStringLiteral("match")).toMap().value(QStringLiteral("role")) == role)) ||
+        (role.isEmpty() && (windowType(window) != QLatin1String("normal") ||
+                            window.value(QStringLiteral("hasTransientParent")).toBool()));
+    if (needsTitle || overlaps()) {
+        const auto caption = window.value(QStringLiteral("caption")).toString();
+        if (caption.isEmpty()) {
+            error = text("This window has no distinct role or title. Create or edit its rule manually.");
+            return {};
+        }
+        match[QStringLiteral("caption")] =
+            QVariantMap{{QStringLiteral("operator"), QStringLiteral("equals")}, {QStringLiteral("value"), caption}};
+        rule[QStringLiteral("match")] = match;
+    }
+    QVariantList checked;
+    if (!decodeRules(encodeRules({rule}), checked, error))
+        return {};
+    const auto failure = matchFailure(rule, window);
+    if (!failure.isEmpty()) {
+        error = failure;
+        return {};
+    }
+    if (overlaps()) {
+        error = text("These windows expose identical matching properties. An automatic rule cannot safely distinguish "
+                     "the selected window.");
+        return {};
+    }
+    // JSON treats QStringList and lists loaded from JSON arrays consistently.
+    if (!widerRule.isEmpty() && QJsonObject::fromVariantMap(match) ==
+                                    QJsonObject::fromVariantMap(widerRule.value(QStringLiteral("match")).toMap())) {
+        error = text("The existing rule already uses these specific properties. Edit that rule instead.");
+        return {};
+    }
+    return rule;
+}
+
 QString encodeRules(const QVariantList &rules, bool indented) {
-    return QString::fromUtf8(QJsonDocument(QJsonObject{{QStringLiteral("schemaVersion"), 6},
+    return QString::fromUtf8(QJsonDocument(QJsonObject{{QStringLiteral("schemaVersion"), 7},
                                                        {QStringLiteral("rules"), QJsonArray::fromVariantList(rules)}})
                                  .toJson(indented ? QJsonDocument::Indented : QJsonDocument::Compact));
 }
@@ -113,11 +202,12 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
     const auto root = doc.object();
     const auto schema = root.value(QStringLiteral("schemaVersion"));
     if (!onlyKeys(root, {QStringLiteral("schemaVersion"), QStringLiteral("rules")}) ||
-        (schema != QJsonValue(1) && schema != QJsonValue(2) && schema != QJsonValue(3) &&
-         schema != QJsonValue(4) && schema != QJsonValue(5) && schema != QJsonValue(6)) ||
+        (schema != QJsonValue(1) && schema != QJsonValue(2) && schema != QJsonValue(3) && schema != QJsonValue(4) &&
+         schema != QJsonValue(5) && schema != QJsonValue(6) && schema != QJsonValue(7)) ||
         !root.value(QStringLiteral("rules")).isArray()) {
         return invalid(text("Unsupported rule format or schema version."));
     }
+    const int version = schema.toInt();
     const auto array = root.value(QStringLiteral("rules")).toArray();
     if (array.size() > MaxRules) {
         return invalid(text("There are too many rules (maximum 1024)."));
@@ -134,8 +224,10 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
                            QStringLiteral("enabled"), QStringLiteral("match")};
     if (schema != QJsonValue(1))
         ruleKeys.insert(QStringLiteral("behavior"));
-    if (schema == QJsonValue(5) || schema == QJsonValue(6))
+    if (version >= 5)
         ruleKeys.insert(QStringLiteral("createdAt"));
+    if (version >= 7)
+        ruleKeys.insert(QStringLiteral("autoCreated"));
     for (const auto &value : array) {
         const auto rule = value.toObject();
         const QString id = rule.value(QStringLiteral("id")).toString();
@@ -148,7 +240,7 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
             !rule.value(QStringLiteral("enabled")).isBool() || !rule.value(QStringLiteral("match")).isObject()) {
             return invalid(text("A rule has missing, invalid or duplicate fields."));
         }
-        if (schema == QJsonValue(5) || schema == QJsonValue(6)) {
+        if (version >= 5) {
             const auto created = rule.value(QStringLiteral("createdAt"));
             const auto date = QDateTime::fromString(created.toString(), Qt::ISODateWithMs);
             // Null means the creation time of an older rule is unknown. Otherwise
@@ -157,6 +249,8 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
                 created.toString().size() != 24 || date.toUTC().toString(Qt::ISODateWithMs) != created.toString()))
                 return invalid(text("A rule has an invalid creation timestamp."));
         }
+        if (version >= 7 && !rule.value(QStringLiteral("autoCreated")).isBool())
+            return invalid(text("The automatically created flag must be a boolean setting."));
         ids.insert(normalizedId);
         if (schema != QJsonValue(1)) {
             const auto behavior = rule.value(QStringLiteral("behavior"));
@@ -165,9 +259,9 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
                 ? QSet<QString>{QStringLiteral("startInTray")}
                 : QSet<QString>{QStringLiteral("autoPin"), QStringLiteral("startInTray"),
                                 QStringLiteral("minimizeToTray"), QStringLiteral("closeToTray")};
-            if (schema == QJsonValue(4) || schema == QJsonValue(5) || schema == QJsonValue(6))
+            if (version >= 4)
                 keys.insert(QStringLiteral("startupProtection"));
-            if (schema == QJsonValue(6))
+            if (version >= 6)
                 keys.insert(QStringLiteral("terminateOnLogout"));
             if (!behavior.isObject() || !onlyKeys(object, keys) ||
                 !object.value(QStringLiteral("startInTray")).isBool()) {
@@ -182,10 +276,9 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
                   object.value(QStringLiteral("startInTray")).toBool()))) {
                 return invalid(text("A rule has invalid action settings or conflicting startup actions."));
             }
-            if ((schema == QJsonValue(4) || schema == QJsonValue(5) || schema == QJsonValue(6)) &&
-                (!object.value(QStringLiteral("startupProtection")).isBool() ||
-                 (object.value(QStringLiteral("startupProtection")).toBool() &&
-                  !object.value(QStringLiteral("startInTray")).toBool()))) {
+            if (version >= 4 && (!object.value(QStringLiteral("startupProtection")).isBool() ||
+                                 (object.value(QStringLiteral("startupProtection")).toBool() &&
+                                  !object.value(QStringLiteral("startInTray")).toBool()))) {
                 return invalid(text("Startup protection requires Start in tray and a boolean setting."));
             }
         }
@@ -232,7 +325,7 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
         if (!hasIdentity) {
             return invalid(text("Select an application ID, window class or instance for each rule."));
         }
-        if (schema == QJsonValue(6) &&
+        if (version >= 6 &&
             !rule.value(QStringLiteral("behavior")).toObject().value(QStringLiteral("terminateOnLogout")).isBool())
             return invalid(text("Quit on logout must be a boolean setting."));
         auto decoded = rule.toVariantMap();
@@ -250,13 +343,15 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
             behavior.insert(QStringLiteral("startupProtection"), false);
             decoded.insert(QStringLiteral("behavior"), behavior);
         }
-        if (schema != QJsonValue(6)) {
+        if (version < 6) {
             auto behavior = decoded.value(QStringLiteral("behavior")).toMap();
             behavior.insert(QStringLiteral("terminateOnLogout"), false);
             decoded.insert(QStringLiteral("behavior"), behavior);
         }
-        if (schema != QJsonValue(5) && schema != QJsonValue(6))
+        if (version < 5)
             decoded.insert(QStringLiteral("createdAt"), QVariant());
+        if (version < 7)
+            decoded.insert(QStringLiteral("autoCreated"), false);
         result.append(decoded);
     }
     rules = result;
@@ -479,7 +574,8 @@ QString ruleSummary(const QVariantMap &rule) {
 }
 
 QString searchText(const QVariantMap &rule) {
-    return rule.value(QStringLiteral("title")).toString() + QLatin1Char('\n') +
+    return (rule.value(QStringLiteral("autoCreated")).toBool() ? text("Auto-created") + QLatin1Char('\n') : QString()) +
+           rule.value(QStringLiteral("title")).toString() + QLatin1Char('\n') +
            rule.value(QStringLiteral("description")).toString() + QLatin1Char('\n') + ruleSummary(rule);
 }
 } // namespace Minimize2Tray

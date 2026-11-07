@@ -12,6 +12,8 @@ inline constexpr int MaxRules = 1024;
 
 QString configLockPath();
 QVariantMap newRule();
+QVariantMap automaticRule(const QVariantMap &window, const QVariantMap &widerRule, const QVariantList &windows,
+                          QString &error);
 QString encodeRules(const QVariantList &rules, bool indented = false);
 bool decodeRules(const QString &json, QVariantList &rules, QString &error);
 QVariantList readRules(KConfig &config, QString &error);

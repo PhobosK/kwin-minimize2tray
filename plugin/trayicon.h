@@ -54,6 +54,7 @@ class TrayIcon : public QObject {
     void requestUnpin(const QUuid windowId);
     void requestAbout();
     void requestConfigure();
+    void requestAutomaticRule();
     void xdgNameChanged();
     void demandsAttentionChanged();
     void countUseDotChanged();

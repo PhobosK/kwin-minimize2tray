@@ -21,6 +21,7 @@
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QStandardPaths>
+#include <QUuid>
 #include <algorithm>
 
 ScriptConfig::ScriptConfig(QObject *parent) : QObject(parent), m_config(QStringLiteral("kwinrc")) {
@@ -228,12 +229,54 @@ void ScriptConfig::showAbout() {
     showDialog(m_aboutDialog.data(), QStringLiteral("about"));
 }
 
-void ScriptConfig::configure() {
+bool ScriptConfig::applyAutomaticRule(const QString &windowId, const QString &ruleId) {
+    if (QUuid(windowId).isNull() || QUuid(ruleId).isNull())
+        return false;
+    reload();
+    if (!m_error.isEmpty())
+        return false;
+    const auto rules = m_values.value(QStringLiteral("rules")).toList();
+    const bool automatic = std::any_of(rules.cbegin(), rules.cend(), [&ruleId](const auto &entry) {
+        const auto rule = entry.toMap();
+        const auto behavior = rule.value(QStringLiteral("behavior")).toMap();
+        return rule.value(QStringLiteral("id")).toString() == ruleId &&
+               behavior.value(QStringLiteral("startInTray")).toBool() &&
+               behavior.value(QStringLiteral("minimizeToTray")) == QLatin1String("enabled");
+    });
+    if (!automatic)
+        return false;
+    for (const auto &entry : windows()) {
+        const auto window = entry.toMap();
+        if (window.value(QStringLiteral("uuid")).toString() == windowId && matchingRules(window).contains(ruleId)) {
+            Q_EMIT automaticRuleCreated(windowId);
+            // QML runs on this thread; read back the actual KWin state before
+            // reporting success to the configuration host.
+            for (const auto &updated : windows()) {
+                const auto state = updated.toMap();
+                if (state.value(QStringLiteral("uuid")).toString() == windowId)
+                    return state.value(QStringLiteral("minimized")).toBool();
+            }
+            return false;
+        }
+    }
+    return false;
+}
+
+void ScriptConfig::configure() { openConfiguration(false); }
+
+void ScriptConfig::addAutomaticRule() { openConfiguration(true); }
+
+void ScriptConfig::openConfiguration(bool automaticRule) {
+    if (m_configRequestPending)
+        return;
+    m_configRequestPending = true;
     const auto request = QDBusMessage::createMethodCall(
         QString::fromLatin1(Minimize2Tray::ConfigService), QStringLiteral("/Minimize2Tray/Configuration"),
-        QString::fromLatin1(Minimize2Tray::ConfigService), QStringLiteral("activate"));
+        QString::fromLatin1(Minimize2Tray::ConfigService),
+        automaticRule ? QStringLiteral("addAutomaticRule") : QStringLiteral("activate"));
     auto watcher = new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(request), this);
-    const auto finished = [this, watcher]() {
+    const auto finished = [this, watcher, automaticRule]() {
+        m_configRequestPending = false;
         const QDBusPendingReply<> reply = *watcher;
         watcher->deleteLater();
         if (!reply.isError() || (m_configProcess && m_configProcess->state() != QProcess::NotRunning))
@@ -275,10 +318,11 @@ void ScriptConfig::configure() {
                 process->deleteLater();
             }
         });
-        process->start(executable, {QStringLiteral("--caption"), tr("Configure Minimize to Tray"),
-                                   QStringLiteral("--args"), QString::fromLatin1(Minimize2Tray::ScriptId) +
-                                       QStringLiteral(" KWin/Script"),
-                                   QStringLiteral("--"), metadata.fileName()});
+        process->start(executable,
+                       {QStringLiteral("--caption"), tr("Configure Minimize to Tray"), QStringLiteral("--args"),
+                        QString::fromLatin1(Minimize2Tray::ScriptId) + QStringLiteral(" KWin/Script") +
+                            (automaticRule ? QStringLiteral(" automatic-rule") : QString()),
+                        QStringLiteral("--"), metadata.fileName()});
     };
     // A disconnected bus can complete before the watcher signal is connected.
     if (watcher->isFinished())

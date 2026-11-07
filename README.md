@@ -41,7 +41,7 @@ cd kwin-minimize2tray
 
 Run as a regular user. The installer builds the fork's latest stable `X.Y.Z`/`vX.Y.Z` tag and installs under `/usr`, using sudo only for final copies. It leaves the checkout and existing `build/` alone. Network failures stop installation.
 
-Use `./install.sh --local` for unpublished checkout changes, or `./install.sh --version 1.0.0` for a specific release. Both installers offer `--help` for source selection, commit pinning, prefixes, staged installation and offline archives.
+Use `./install.sh --local` for unpublished checkout changes, or `./install.sh --version 2.0.0` for a specific release. Both installers offer `--help` for source selection, commit pinning, prefixes, staged installation and offline archives.
 
 ### Immutable/user installation
 
@@ -56,7 +56,7 @@ For a custom prefix, use the paths printed by the installer. A user installation
 
 ### openSUSE Tumbleweed RPM
 
-The standalone spec builds this fork only. It defaults to tag `v1.0.0`; `release_version` sets both the RPM and application version. It downloads the selected archive if missing from RPM's `SOURCES` directory.
+The standalone spec builds this fork only. It defaults to tag `v2.0.0`; `release_version` sets both the RPM and application version. It downloads the selected archive if missing from RPM's `SOURCES` directory.
 
 ```sh
 rpmbuild -ba distro/rpm/kwin6-script-minimize2tray.spec
@@ -71,7 +71,7 @@ rpmbuild -ba --define 'release_version 0.4.0' distro/rpm/kwin6-script-minimize2t
 Or select a full commit SHA with an explicit application version:
 
 ```sh
-rpmbuild -ba --define 'release_version 1.0.0' --define 'commit FULL_SHA' distro/rpm/kwin6-script-minimize2tray.spec
+rpmbuild -ba --define 'release_version 2.0.0' --define 'commit FULL_SHA' distro/rpm/kwin6-script-minimize2tray.spec
 ```
 
 The tag format is `vX.Y.Z`. Selected sources must contain this fork's native configuration module and current CMake version option.
@@ -107,6 +107,10 @@ Set `MINIMIZE2TRAY_VERSION` in CMake or pass `-DMINIMIZE2TRAY_VERSION=1.2.3`. Ot
 ## Configuration and use
 
 Enable **Minimize to Tray** in **System Settings → Window Management → KWin Scripts**. The default shortcut is **Meta+Alt+PgDown**, configurable under **Keyboard → Shortcuts → KWin**.
+
+Use **Add tray rule…** in any tray icon’s separate menu group to pick a window with KWin’s native picker (Escape cancels). Its global shortcut is unassigned by default. New rules enable **Start in tray** and **Minimize to tray: On**, hide the selected window, then offer **Review rule…** or **Keep rule**. If a rule already matches, choose **Edit existing rule**, **Create a narrower rule**, or **Cancel**; disabled matching rules are included. Existing fields and actions are preserved. Colored suggestions in unused fields are inactive until **Use** is selected. Narrow rules prefer roles; exact titles are used when needed and stop matching if the title changes. Indistinguishable windows require manual configuration. Finish pending configuration edits before using this action. Existing wider rules continue applying independently.
+
+Generated rules are marked **Auto-created** in the list and **Automatically created** in the editor. Reviewing or accepting them unchanged keeps the flag; saving rule changes removes it. Export/import preserves the flag. Older rules without origin metadata remain unmarked.
 
 Open **Configure…** from a tray menu, then use **Add rule → Detect window properties**. Match an application, class, instance, role or title. Matching is case-sensitive: selected conditions use AND; enabled rules use OR. Use role/title conditions to distinguish separate windows of one app. Changes take effect with **Apply/OK**; Cancel discards edits.
 

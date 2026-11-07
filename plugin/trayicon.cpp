@@ -399,6 +399,15 @@ void TrayIcon::initializeTrayIcon() {
     connect(configureAction, &QAction::triggered, this, &TrayIcon::requestConfigure, Qt::QueuedConnection);
 
     m_menu->addSeparator();
+    auto automaticRule = m_menu->addAction(QIcon::fromTheme(QStringLiteral("list-add")), tr("Add tray rule…"));
+    automaticRule->setToolTip(
+        tr("Pick any application window with KWin’s window picker; press Escape to cancel. "
+           "A new rule is saved immediately: hide the selected window now, start matching windows in the tray, "
+           "and hide them there when minimized. If a rule already matches, choose Edit existing rule, "
+           "Create a narrower rule, or Cancel. You can review a new rule afterward."));
+    connect(automaticRule, &QAction::triggered, this, &TrayIcon::requestAutomaticRule, Qt::QueuedConnection);
+
+    m_menu->addSeparator();
     auto quitAction = m_menu->addAction(QIcon::fromTheme(QStringLiteral("application-exit")), tr("Quit"));
     quitAction->setToolTip(tr("Close this window. Other windows of the application may remain open."));
     connect(quitAction, &QAction::triggered, this, [this]() { emit requestClose(m_windowId); }, Qt::QueuedConnection);

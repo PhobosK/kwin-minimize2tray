@@ -26,6 +26,7 @@ class ScriptConfig : public QObject {
     Q_INVOKABLE qint64 monotonicMilliseconds() const { return m_elapsed.elapsed(); }
     Q_INVOKABLE void showAbout();
     Q_INVOKABLE void configure();
+    Q_INVOKABLE void addAutomaticRule();
     Q_INVOKABLE bool isProtected(const QVariantMap &window) const;
     Q_INVOKABLE QStringList matchingRules(const QVariantMap &window) const;
     Q_INVOKABLE void terminateSessionWindows(const QVariantList &windows);
@@ -34,14 +35,17 @@ class ScriptConfig : public QObject {
 
   public slots:
     Q_SCRIPTABLE QVariantList windows();
+    Q_SCRIPTABLE bool applyAutomaticRule(const QString &windowId, const QString &ruleId);
 
   signals:
     void sessionClosing();
     void valuesChanged();
     void windowsRequested();
+    void automaticRuleCreated(const QString &windowId);
 
   private:
     void reload();
+    void openConfiguration(bool automaticRule);
     void showDialog(QDialog *dialog, const QString &role);
     KConfig m_config;
     std::unique_ptr<SessionTermination> m_sessionTermination;
@@ -57,4 +61,5 @@ class ScriptConfig : public QObject {
     QString m_rulesSource;
     bool m_hasRulesSource = false;
     bool m_registered = false;
+    bool m_configRequestPending = false;
 };
