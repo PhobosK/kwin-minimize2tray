@@ -41,7 +41,7 @@ cd kwin-minimize2tray
 
 Run as a regular user. The installer builds the fork's latest stable `X.Y.Z`/`vX.Y.Z` tag and installs under `/usr`, using sudo only for final copies. It leaves the checkout and existing `build/` alone. Network failures stop installation.
 
-Use `./install.sh --local` for unpublished checkout changes, or `./install.sh --version 2.0.0` for a specific release. Both installers offer `--help` for source selection, commit pinning, prefixes, staged installation and offline archives.
+Use `./install.sh --local` for unpublished checkout changes, or `./install.sh --version 2.1.0` for a specific release. Both installers offer `--help` for source selection, commit pinning, prefixes, staged installation and offline archives.
 
 ### Immutable/user installation
 
@@ -56,7 +56,7 @@ For a custom prefix, use the paths printed by the installer. A user installation
 
 ### openSUSE Tumbleweed RPM
 
-The standalone spec builds this fork only. It defaults to tag `v2.0.0`; `release_version` sets both the RPM and application version. It downloads the selected archive if missing from RPM's `SOURCES` directory.
+The standalone spec builds this fork only. It defaults to tag `v2.1.0`; `release_version` sets both the RPM and application version. It downloads the selected archive if missing from RPM's `SOURCES` directory.
 
 ```sh
 rpmbuild -ba distro/rpm/kwin6-script-minimize2tray.spec
@@ -71,7 +71,7 @@ rpmbuild -ba --define 'release_version 0.4.0' distro/rpm/kwin6-script-minimize2t
 Or select a full commit SHA with an explicit application version:
 
 ```sh
-rpmbuild -ba --define 'release_version 2.0.0' --define 'commit FULL_SHA' distro/rpm/kwin6-script-minimize2tray.spec
+rpmbuild -ba --define 'release_version 2.1.0' --define 'commit FULL_SHA' distro/rpm/kwin6-script-minimize2tray.spec
 ```
 
 The tag format is `vX.Y.Z`. Selected sources must contain this fork's native configuration module and current CMake version option.
@@ -94,6 +94,30 @@ dpkg-buildpackage -us -uc
 ```
 
 This targets Debian 13 and Ubuntu 26.10 with Plasma 6 development packages (Ubuntu needs Universe). Source selection and its checksum are recorded in the prepared package; the build performs no tag lookup or download. No container is required.
+
+### Arch Linux and Gentoo
+
+The release workflow builds an Arch Linux package and publishes Arch source recipes plus a Gentoo overlay. All use the same published source archive; checksums are generated from that archive rather than skipped. Prepare recipes from a published release, or add `--archive /path/to/source.tar.gz` for offline use (`--commit FULL_SHA` selects a commit archive):
+
+```sh
+python3 distro/prepare.py arch /tmp/minimize2tray-arch
+python3 distro/prepare.py gentoo /tmp/minimize2tray-gentoo
+```
+
+On Arch, run `cd /tmp/minimize2tray-arch && makepkg --syncdeps` as a regular user. The workflow also publishes the generated `PKGBUILD` and `.SRCINFO`; no install hook is needed. The checkout's `PKGBUILD` requires preparation first because its source checksum depends on the release archive.
+
+On Gentoo, register the prepared `overlay` directory as a local repository with `masters = gentoo`, then emerge `kde-misc/kwin6-script-minimize2tray`. The overlay includes a distfile Manifest. USE flags map to CMake options:
+
+| USE flag | Default | CMake option |
+| --- | --- | --- |
+| `native-plugin` | On | `BUILD_PLUGIN` |
+| `script` | On | `INSTALL_SCRIPT` |
+| `script-archive` | Off | `PACKAGE_SCRIPT` |
+| `session-termination` | Off | `BUILD_SESSION_TERMINATION` |
+
+`session-termination` requires KWin 6.8+ and Linux 6.13+ headers; rebuild it after KWin updates. Keep at least one of the plugin, script or archive enabled. The script needs the native plugin at runtime; disabling the plugin is useful when packaging it separately. Gentoo CI checks ebuild metadata and the Manifest, while a full emerge and live Plasma verification remain required on Gentoo. Arch attempts the optional adapter when its SDK requirements are available. Rebuild native plugins after KWin updates.
+
+In GitHub Actions, the default `all` target covers Tumbleweed, Debian 13, Ubuntu 26.04 LTS, Arch Linux and the Gentoo overlay checks. The `archlinux` and `gentoo` selections run just those checks without publishing; publication requires `all`. Local VS Code tasks provide the same choices. A release contains the source archive, three RPM/DEB packages, the Arch binary and recipes, the Gentoo overlay and `SHA256SUMS`.
 
 ### Developer build
 

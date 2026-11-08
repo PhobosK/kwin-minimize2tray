@@ -1,3 +1,9 @@
+kwin6-script-minimize2tray (2.1.0-1) unstable; urgency=medium
+
+  * Add Gentoo and Arch Linux packaging and integrate release validation.
+
+ -- PhobosK <PhobosK@users.noreply.github.com>  Sun, 08 Nov 2026 12:00:00 +0200
+
 kwin6-script-minimize2tray (2.0.0-1) unstable; urgency=medium
 
   * Add native window picking for automatic tray rules, with a separate

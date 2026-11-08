@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+  <use>
+    <flag name="native-plugin">Build the native tray plugin and configuration module</flag>
+    <flag name="script">Install the KWin script</flag>
+    <flag name="script-archive">Also install a standalone .kwinscript archive</flag>
+    <flag name="session-termination">Build optional native Wayland logout termination support; requires KWin 6.8+ and Linux 6.13+ headers</flag>
+  </use>
+  <upstream>
+    <remote-id type="github">PhobosK/kwin-minimize2tray</remote-id>
+  </upstream>
+</pkgmetadata>

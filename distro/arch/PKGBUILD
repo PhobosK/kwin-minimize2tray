@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Run distro/prepare.py arch OUTPUT first to fill the verified source checksum.
+pkgname=kwin6-script-minimize2tray
+pkgver=2.1.0
+pkgrel=1
+pkgdesc='Minimize application windows to the tray in KDE Plasma 6 (PhobosK fork)'
+arch=('x86_64')
+url='https://github.com/PhobosK/kwin-minimize2tray'
+license=('GPL-3.0-only')
+depends=('libgcc' 'libstdc++' 'glibc' 'qt6-base>=6.6' 'qt6-declarative>=6.6'
+         'kconfig>=6.0' 'kcoreaddons>=6.0' 'kcmutils>=6.0' 'kservice>=6.0'
+         'kstatusnotifieritem>=6.0' 'kwindowsystem>=6.0' 'kxmlgui>=6.0'
+         'kwin>=6.0' 'plasma-workspace>=6.0')
+makedepends=('cmake>=3.19' 'extra-cmake-modules>=6.0' 'ninja'
+             'linux-api-headers>=6.13' 'vulkan-headers')
+_source_name="kwin-minimize2tray-${pkgver}.tar.gz"
+_source_dir="kwin-minimize2tray-${pkgver}"
+_source_sha256=''
+source=("${_source_name}::${url}/releases/download/v${pkgver}/${_source_name}")
+sha256sums=("${_source_sha256}")
+
+if [[ ! ${_source_sha256} =~ ^[0-9a-f]{64}$ ]]; then
+    printf '%s\n' 'Prepare this recipe with distro/prepare.py arch OUTPUT before using makepkg.' >&2
+    return 1
+fi
+
+build() {
+    cmake -S "${srcdir}/${_source_dir}" -B build -G Ninja \
+        -DCMAKE_BUILD_TYPE=None \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DCMAKE_INSTALL_LIBDIR=lib \
+        -DKDE_INSTALL_QMLDIR=lib/qt6/qml \
+        -DKDE_INSTALL_PLUGINDIR=lib/qt6/plugins \
+        -DBUILD_PLUGIN=ON \
+        -DINSTALL_SCRIPT=ON \
+        -DPACKAGE_SCRIPT=OFF \
+        -DBUILD_SESSION_TERMINATION=ON \
+        -DCMAKE_EXPORT_COMPILE_COMMANDS=OFF \
+        -DMINIMIZE2TRAY_VERSION="${pkgver}"
+    cmake --build build
+}
+
+package() {
+    DESTDIR="${pkgdir}" cmake --install build
+    install -Dm644 "${srcdir}/${_source_dir}/README.md" "${pkgdir}/usr/share/doc/${pkgname}/README.md"
+    install -Dm644 "${srcdir}/${_source_dir}/CONTRIBUTING.md" "${pkgdir}/usr/share/doc/${pkgname}/CONTRIBUTING.md"
+}

@@ -17,6 +17,15 @@ on:
         required: false
         type: string
         default: ''
+      target:
+        description: 'Target to check (publishing requires all)'
+        required: false
+        type: choice
+        default: all
+        options:
+          - all
+          - archlinux
+          - gentoo
       publish:
         description: 'Publish a GitHub Release (requires an existing tag)'
         required: false
@@ -50,8 +59,13 @@ jobs:
           REQUESTED_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
           WANT_PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
           SELECTED_SHA: ${{ github.sha }}
+          TARGET: ${{ github.event_name == 'push' && 'all' || inputs.target }}
         run: |
           set -euo pipefail
+          case "$TARGET" in all|archlinux|gentoo) ;; *) echo '::error::Invalid build target.'; exit 1 ;; esac
+          if [[ "$WANT_PUBLISH" == 'true' && "$TARGET" != all ]]; then
+            echo '::error::Publishing requires all package targets.'; exit 1
+          fi
           core='(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
           if [[ -n "$REQUESTED_TAG" && ! "$REQUESTED_TAG" =~ ^v$core$ ]]; then
             echo '::error::Tag must be in vX.Y.Z format, without leading zeroes.'; exit 1
@@ -107,14 +121,18 @@ jobs:
           if ! grep -Fqx "%{!?release_version:%global release_version $version}" distro/rpm/kwin6-script-minimize2tray.spec; then
             echo "::error::RPM spec default version does not match $version."; exit 1
           fi
+          if ! grep -Fqx "pkgver=$version" distro/arch/PKGBUILD; then
+            echo '::error::Arch PKGBUILD version does not match metadata.'; exit 1
+          fi
+          test -s "distro/gentoo/kde-misc/kwin6-script-minimize2tray/kwin6-script-minimize2tray-$version.ebuild"
           if [[ -n "$tag" && "$tag" != "v$version" ]]; then
             echo "::error::Tag $tag does not match v$version."; exit 1
           fi
-          for file in distro/debian/prepare.py distro/debian/control distro/debian/rules distro/debian/kwin6-script-minimize2tray.install distro/rpm/kwin6-script-minimize2tray.spec plugin/CMakeLists.txt; do
+          for file in distro/prepare.py distro/arch/PKGBUILD distro/gentoo/metadata/layout.conf distro/gentoo/profiles/repo_name distro/gentoo/kde-misc/kwin6-script-minimize2tray/metadata.xml distro/debian/prepare.py distro/debian/control distro/debian/rules distro/debian/kwin6-script-minimize2tray.install distro/rpm/kwin6-script-minimize2tray.spec plugin/CMakeLists.txt; do
             test -s "$file" || { echo "::error::Missing packaging file: $file"; exit 1; }
           done
 
-          # Both RPM and DEB builds use this one archive from the exact commit.
+          # All package targets use this one archive from the exact commit.
           # Its top-level directory matches the archive layout expected by
           # the existing RPM %prep and Debian prepare.py scripts.
           if [[ -n "$tag" ]]; then source_suffix="$version"; else source_suffix="$source_sha"; fi
@@ -145,6 +163,7 @@ jobs:
           retention-days: 14
 
   tumbleweed:
+    if: github.event_name == 'push' || inputs.target == 'all'
     name: openSUSE Tumbleweed RPM (x86_64)
     needs: prepare
     runs-on: ubuntu-24.04
@@ -222,6 +241,7 @@ jobs:
           retention-days: 14
 
   debian_ubuntu:
+    if: github.event_name == 'push' || inputs.target == 'all'
     name: ${{ matrix.name }} DEB (amd64)
     needs: prepare
     runs-on: ubuntu-24.04
@@ -304,10 +324,136 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  archlinux:
+    name: Arch Linux package and source recipes (x86_64)
+    if: github.event_name == 'push' || inputs.target == 'all' || inputs.target == 'archlinux'
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    container:
+      image: archlinux:base-devel
+    steps:
+      - name: Update Arch build tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          pacman -Syu --noconfirm --needed base-devel python cmake extra-cmake-modules ninja
+          useradd --user-group --create-home builder
+          printf '%s\n' 'builder ALL=(root) NOPASSWD: /usr/bin/pacman' > /etc/sudoers.d/minimize2tray-builder
+          chmod 0440 /etc/sudoers.d/minimize2tray-builder
+
+      - name: Download pinned source archive
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: pinned-source
+          path: _source
+
+      - name: Build Arch package as an unprivileged user
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          SHA: ${{ needs.prepare.outputs.source_sha }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          ARCHIVE_NAME: ${{ needs.prepare.outputs.archive_name }}
+          ARCHIVE_SHA256: ${{ needs.prepare.outputs.archive_sha256 }}
+        run: |
+          set -euo pipefail
+          echo "$ARCHIVE_SHA256  _source/$ARCHIVE_NAME" | sha256sum --check --strict
+          work="$RUNNER_TEMP/arch-build"
+          mkdir "$work"
+          mkdir "$work/source"
+          tar -xzf "_source/$ARCHIVE_NAME" -C "$work/source" --strip-components=1
+          if [[ -n "$TAG" ]]; then commit_args=(); else commit_args=(--commit "$SHA"); fi
+          python3 "$work/source/distro/prepare.py" arch "$work/package" --archive "$GITHUB_WORKSPACE/_source/$ARCHIVE_NAME" --sha256 "$ARCHIVE_SHA256" "${commit_args[@]}"
+          chown -R builder:builder "$work"
+          cd "$work/package"
+          runuser -u builder -- makepkg --syncdeps --noconfirm --cleanbuild
+          runuser -u builder -- bash -c 'makepkg --printsrcinfo > .SRCINFO'
+          shopt -s nullglob
+          packages=(kwin6-script-minimize2tray-"$VERSION"-*-x86_64.pkg.tar.zst)
+          [[ ${#packages[@]} -eq 1 && -s "${packages[0]}" ]]
+          [[ "$(pacman -Qp "${packages[0]}")" == "kwin6-script-minimize2tray $VERSION-"* ]]
+          pacman -Qlp "${packages[0]}" | grep -F 'kcm_minimize2tray.so'
+          pacman -Qlp "${packages[0]}" | grep -F 'trayiconplugin.so'
+          pacman -Qlp "${packages[0]}" | grep -F 'com.github.luisbocanegra.minimize2tray/'
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          cp "${packages[0]}" "$GITHUB_WORKSPACE/dist/"
+          tar -czf "$GITHUB_WORKSPACE/dist/kwin6-script-minimize2tray-$VERSION-archlinux-src.tar.gz" PKGBUILD .SRCINFO source-selection
+
+      - name: Upload Arch binary and source recipes
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pkg-archlinux
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  gentoo:
+    name: Gentoo overlay metadata and Manifest checks
+    if: github.event_name == 'push' || inputs.target == 'all' || inputs.target == 'gentoo'
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    container:
+      image: gentoo/stage3:desktop
+    steps:
+      - name: Obtain Gentoo eclasses and profiles
+        shell: bash
+        run: |
+          set -euo pipefail
+          emerge-webrsync
+
+      - name: Download pinned source archive
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: pinned-source
+          path: _source
+
+      - name: Prepare and validate Gentoo overlay without installing the application
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          SHA: ${{ needs.prepare.outputs.source_sha }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          ARCHIVE_NAME: ${{ needs.prepare.outputs.archive_name }}
+          ARCHIVE_SHA256: ${{ needs.prepare.outputs.archive_sha256 }}
+        run: |
+          set -euo pipefail
+          echo "$ARCHIVE_SHA256  _source/$ARCHIVE_NAME" | sha256sum --check --strict
+          work="$RUNNER_TEMP/gentoo-build"
+          mkdir "$work"
+          mkdir "$work/source"
+          tar -xzf "_source/$ARCHIVE_NAME" -C "$work/source" --strip-components=1
+          if [[ -n "$TAG" ]]; then commit_args=(); else commit_args=(--commit "$SHA"); fi
+          python3 "$work/source/distro/prepare.py" gentoo "$work/package" --archive "$GITHUB_WORKSPACE/_source/$ARCHIVE_NAME" --sha256 "$ARCHIVE_SHA256" "${commit_args[@]}"
+          export PORTAGE_REPOSITORIES="[DEFAULT]
+          main-repo = gentoo
+          [gentoo]
+          location = /var/db/repos/gentoo
+          [minimize2tray]
+          location = $work/package/overlay
+          masters = gentoo"
+          export DISTDIR="$work/package/distfiles"
+          recipe="$work/package/overlay/kde-misc/kwin6-script-minimize2tray/kwin6-script-minimize2tray-$VERSION.ebuild"
+          manifest="$(dirname "$recipe")/Manifest"
+          cp "$manifest" "$work/expected-Manifest"
+          ebuild --force "$recipe" manifest
+          cmp "$manifest" "$work/expected-Manifest"
+          mkdir -p dist
+          tar -czf "dist/kwin6-script-minimize2tray-$VERSION-gentoo-overlay.tar.gz" -C "$work/package" overlay source-selection
+
+      - name: Upload Gentoo source overlay
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pkg-gentoo
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
   publish:
-    name: Publish Release when all three builds pass
+    name: Publish Release when all builds and packaging checks pass
     if: github.event_name == 'push' || inputs.publish == true
-    needs: [prepare, tumbleweed, debian_ubuntu]
+    needs: [prepare, tumbleweed, debian_ubuntu, archlinux, gentoo]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -320,23 +466,36 @@ jobs:
           path: release-assets
           merge-multiple: true
 
+      - name: Download the shared source archive for publication
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: pinned-source
+          path: release-assets
+
       - name: Verify all targets and generate checksum manifest
         shell: bash
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
           DEB_VERSION: ${{ needs.prepare.outputs.deb_version }}
+          ARCHIVE_NAME: ${{ needs.prepare.outputs.archive_name }}
+          ARCHIVE_SHA256: ${{ needs.prepare.outputs.archive_sha256 }}
         run: |
           set -euo pipefail
           shopt -s nullglob dotglob
           rpms=(release-assets/kwin6-script-minimize2tray-"$VERSION"-*.x86_64.rpm)
           debian="release-assets/kwin6-script-minimize2tray_${DEB_VERSION}_debian13_amd64.deb"
           ubuntu="release-assets/kwin6-script-minimize2tray_${DEB_VERSION}_ubuntu2604_amd64.deb"
+          arch=(release-assets/kwin6-script-minimize2tray-"$VERSION"-*-x86_64.pkg.tar.zst)
+          arch_source="release-assets/kwin6-script-minimize2tray-$VERSION-archlinux-src.tar.gz"
+          gentoo="release-assets/kwin6-script-minimize2tray-$VERSION-gentoo-overlay.tar.gz"
+          source="release-assets/$ARCHIVE_NAME"
           assets=(release-assets/*)
-          [[ ${#rpms[@]} -eq 1 && ${#assets[@]} -eq 3 ]] || { echo '::error::Missing/duplicate or unexpected distribution package.'; exit 1; }
-          for package in "${rpms[@]}" "$debian" "$ubuntu"; do
+          [[ ${#rpms[@]} -eq 1 && ${#arch[@]} -eq 1 && ${#assets[@]} -eq 7 ]] || { echo '::error::Missing/duplicate or unexpected distribution package.'; exit 1; }
+          for package in "${rpms[@]}" "$debian" "$ubuntu" "${arch[@]}" "$arch_source" "$gentoo" "$source"; do
             [[ -f "$package" && ! -L "$package" && -s "$package" ]] || { echo "::error::Missing/empty or unsafe package: $package"; exit 1; }
           done
-          (cd release-assets && sha256sum -- *.deb *.rpm > SHA256SUMS && cat SHA256SUMS)
+          echo "$ARCHIVE_SHA256  $source" | sha256sum --check --strict
+          (cd release-assets && sha256sum -- * > SHA256SUMS && cat SHA256SUMS)
 
       - name: Publish new GitHub Release (never replace an existing one)
         shell: bash
