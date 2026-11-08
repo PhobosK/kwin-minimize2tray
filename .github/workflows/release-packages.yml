@@ -1,0 +1,358 @@
+# GitHub discovers this workflow after it is committed and pushed.
+# Manual dispatch and the VS Code tasks require this workflow on remote main
+# (the default branch) and authenticated GitHub CLI for the local tasks.
+# Build-only: Actions > Build Minimize2Tray packages > Run workflow (leave tag blank).
+# Build a tag without publishing: enter vX.Y.Z and leave publish unchecked.
+# Publish: push a new vX.Y.Z tag, or dispatch an existing tag with publish checked.
+name: Build Minimize2Tray packages
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Optional existing tag (vX.Y.Z). Blank = test the selected branch commit.'
+        required: false
+        type: string
+        default: ''
+      publish:
+        description: 'Publish a GitHub Release (requires an existing tag)'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: packages-${{ github.workflow }}-${{ github.event_name == 'push' && github.ref_name || inputs.tag || github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Validate version and make pinned source archive
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      version: ${{ steps.source.outputs.version }}
+      deb_version: ${{ steps.source.outputs.deb_version }}
+      source_sha: ${{ steps.source.outputs.source_sha }}
+      tag: ${{ steps.source.outputs.tag }}
+      archive_name: ${{ steps.source.outputs.archive_name }}
+      archive_sha256: ${{ steps.source.outputs.archive_sha256 }}
+    steps:
+      - name: Validate inputs before checking out source
+        id: request
+        shell: bash
+        env:
+          REQUESTED_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+          WANT_PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
+          SELECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          core='(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
+          if [[ -n "$REQUESTED_TAG" && ! "$REQUESTED_TAG" =~ ^v$core$ ]]; then
+            echo '::error::Tag must be in vX.Y.Z format, without leading zeroes.'; exit 1
+          fi
+          if [[ "$WANT_PUBLISH" == 'true' && -z "$REQUESTED_TAG" ]]; then
+            echo '::error::Publishing requires an existing version tag.'; exit 1
+          fi
+          if [[ -n "$REQUESTED_TAG" ]]; then
+            echo "ref=refs/tags/$REQUESTED_TAG" >> "$GITHUB_OUTPUT"
+          else
+            [[ "$SELECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+            echo "ref=$SELECTED_SHA" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out selected commit or exact tag
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ steps.request.outputs.ref }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify versions and source identity
+        id: source
+        shell: bash
+        env:
+          REQUESTED_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+          PUSH_SHA: ${{ github.event_name == 'push' && github.sha || '' }}
+        run: |
+          set -euo pipefail
+          tag="$REQUESTED_TAG"
+          core='(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
+          source_sha="$(git rev-parse --verify 'HEAD^{commit}')"
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]]
+          if [[ -n "$PUSH_SHA" ]]; then
+            pushed_sha="$(git rev-parse --verify "$PUSH_SHA^{commit}")"
+            [[ "$source_sha" == "$pushed_sha" ]] || { echo '::error::Tag no longer matches the pushed commit.'; exit 1; }
+          fi
+          if [[ -n "$tag" ]]; then
+            tagged_sha="$(git rev-parse --verify "refs/tags/$tag^{commit}")"
+            if [[ "$tagged_sha" != "$source_sha" ]]; then
+              echo "::error::Tag $tag does not point to the checked-out commit."; exit 1
+            fi
+          fi
+
+          version="$(python3 -c 'import json; print(json.load(open("package/metadata.json"))["KPlugin"]["Version"])')"
+          if [[ ! "$version" =~ ^$core$ ]]; then
+            echo "::error::Invalid application version: $version"; exit 1
+          fi
+          deb_version="$(dpkg-parsechangelog -l distro/debian/changelog -S Version)"
+          if [[ ! "$deb_version" =~ ^$core-[1-9][0-9]*$ || "${deb_version%%-*}" != "$version" ]]; then
+            echo "::error::Debian changelog version $deb_version does not match $version."; exit 1
+          fi
+          if ! grep -Fqx "%{!?release_version:%global release_version $version}" distro/rpm/kwin6-script-minimize2tray.spec; then
+            echo "::error::RPM spec default version does not match $version."; exit 1
+          fi
+          if [[ -n "$tag" && "$tag" != "v$version" ]]; then
+            echo "::error::Tag $tag does not match v$version."; exit 1
+          fi
+          for file in distro/debian/prepare.py distro/debian/control distro/debian/rules distro/debian/kwin6-script-minimize2tray.install distro/rpm/kwin6-script-minimize2tray.spec plugin/CMakeLists.txt; do
+            test -s "$file" || { echo "::error::Missing packaging file: $file"; exit 1; }
+          done
+
+          # Both RPM and DEB builds use this one archive from the exact commit.
+          # Its top-level directory matches the archive layout expected by
+          # the existing RPM %prep and Debian prepare.py scripts.
+          if [[ -n "$tag" ]]; then source_suffix="$version"; else source_suffix="$source_sha"; fi
+          archive_name="kwin-minimize2tray-$source_suffix.tar.gz"
+          mkdir -p source
+          git archive --format=tar.gz --prefix="kwin-minimize2tray-$source_suffix/" HEAD -o "source/$archive_name"
+          test -s "source/$archive_name"
+          tar -tzf "source/$archive_name" | grep -Fx "kwin-minimize2tray-$source_suffix/CMakeLists.txt" > /dev/null
+          archive_sha256="$(sha256sum "source/$archive_name" | cut -d ' ' -f 1)"
+
+          {
+            echo "version=$version"
+            echo "deb_version=$deb_version"
+            echo "source_sha=$source_sha"
+            echo "tag=$tag"
+            echo "archive_name=$archive_name"
+            echo "archive_sha256=$archive_sha256"
+          } >> "$GITHUB_OUTPUT"
+          echo "Source commit: $source_sha"
+          echo "Package version: $version (Debian $deb_version)"
+
+      - name: Upload pinned source for all build jobs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pinned-source
+          path: source/*.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  tumbleweed:
+    name: openSUSE Tumbleweed RPM (x86_64)
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    container:
+      image: opensuse/tumbleweed:latest
+    steps:
+      - name: Install RPM build tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          zypper --non-interactive refresh
+          zypper --non-interactive install --no-recommends rpm-build git ca-certificates tar gzip make
+
+      - name: Check out packaging specification from pinned commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+          persist-credentials: false
+
+      - name: Install build dependencies declared by the RPM spec
+        shell: bash
+        run: |
+          set -euo pipefail
+          requirements="$(rpmspec -q --buildrequires distro/rpm/kwin6-script-minimize2tray.spec)"
+          [[ -n "$requirements" ]]
+          mapfile -t build_requires <<< "$requirements"
+          zypper --non-interactive install --no-recommends "${build_requires[@]}"
+
+      - name: Download verified source archive
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: pinned-source
+          path: _source
+
+      - name: Compile RPM using the existing spec
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          SHA: ${{ needs.prepare.outputs.source_sha }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          ARCHIVE_NAME: ${{ needs.prepare.outputs.archive_name }}
+          ARCHIVE_SHA256: ${{ needs.prepare.outputs.archive_sha256 }}
+        run: |
+          set -euo pipefail
+          echo "$ARCHIVE_SHA256  _source/$ARCHIVE_NAME" | sha256sum --check --strict
+          topdir="$RUNNER_TEMP/rpmbuild"
+          mkdir -p "$topdir"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+          if [[ -n "$TAG" ]]; then
+            cp "_source/$ARCHIVE_NAME" "$topdir/SOURCES/kwin6-script-minimize2tray-PhobosK-$TAG.tar.gz"
+            commit_args=()
+          else
+            cp "_source/$ARCHIVE_NAME" "$topdir/SOURCES/kwin6-script-minimize2tray-PhobosK-$SHA.tar.gz"
+            commit_args=(--define "commit $SHA")
+          fi
+          rpmbuild -ba --define "_topdir $topdir" --define "release_version $VERSION" "${commit_args[@]}" distro/rpm/kwin6-script-minimize2tray.spec
+          mkdir -p dist
+          find "$topdir/RPMS" -type f -name "kwin6-script-minimize2tray-$VERSION-*.x86_64.rpm" -exec cp -v '{}' dist/ \;
+          shopt -s nullglob
+          rpms=(dist/*.x86_64.rpm)
+          [[ ${#rpms[@]} -eq 1 ]] || { echo '::error::Exactly one RPM expected.'; exit 1; }
+          [[ "$(rpm -qp --qf '%{NAME}' "${rpms[0]}")" == 'kwin6-script-minimize2tray' ]]
+          [[ "$(rpm -qp --qf '%{VERSION}' "${rpms[0]}")" == "$VERSION" ]]
+          [[ "$(rpm -qp --qf '%{ARCH}' "${rpms[0]}")" == 'x86_64' ]]
+          rpm -qpl "${rpms[0]}" | grep -F 'kcm_minimize2tray.so'
+          rpm -qpl "${rpms[0]}" | grep -F 'trayiconplugin.so'
+          rpm -qpl "${rpms[0]}" | grep -F 'com.github.luisbocanegra.minimize2tray/'
+
+      - name: Upload RPM artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pkg-tumbleweed
+          path: dist/*.rpm
+          if-no-files-found: error
+          retention-days: 14
+
+  debian_ubuntu:
+    name: ${{ matrix.name }} DEB (amd64)
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Debian 13 Trixie
+            label: debian13
+            image: debian:trixie
+          - name: Ubuntu 26.04 LTS
+            label: ubuntu2604
+            image: ubuntu:26.04
+    container:
+      image: ${{ matrix.image }}
+    steps:
+      - name: Enable repositories and install Debian build tooling
+        shell: bash
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          LABEL: ${{ matrix.label }}
+        run: |
+          set -euo pipefail
+          apt-get update
+          if [[ "$LABEL" == 'ubuntu2604' ]]; then
+            apt-get install -y --no-install-recommends software-properties-common
+            add-apt-repository -y universe
+            apt-get update
+          fi
+          apt-get install -y --no-install-recommends ca-certificates git python3 dpkg-dev build-essential debhelper devscripts equivs
+
+      - name: Check out Debian packaging tools from pinned commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+          persist-credentials: false
+
+      - name: Download verified source archive
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: pinned-source
+          path: _source
+
+      - name: Compile DEB using the existing Debian packaging
+        shell: bash
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          VERSION: ${{ needs.prepare.outputs.version }}
+          DEB_VERSION: ${{ needs.prepare.outputs.deb_version }}
+          SHA: ${{ needs.prepare.outputs.source_sha }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          ARCHIVE_NAME: ${{ needs.prepare.outputs.archive_name }}
+          ARCHIVE_SHA256: ${{ needs.prepare.outputs.archive_sha256 }}
+          LABEL: ${{ matrix.label }}
+        run: |
+          set -euo pipefail
+          echo "$ARCHIVE_SHA256  _source/$ARCHIVE_NAME" | sha256sum --check --strict
+          if [[ -n "$TAG" ]]; then commit_args=(); else commit_args=(--commit "$SHA"); fi
+          python3 distro/debian/prepare.py "$RUNNER_TEMP/deb-build" --archive "$GITHUB_WORKSPACE/_source/$ARCHIVE_NAME" "${commit_args[@]}"
+          cd "$RUNNER_TEMP/deb-build/kwin6-script-minimize2tray-$VERSION"
+          mk-build-deps --install --remove --tool 'apt-get -y --no-install-recommends' debian/control
+          dpkg-buildpackage -b -us -uc -j2
+          package="$RUNNER_TEMP/deb-build/kwin6-script-minimize2tray_${DEB_VERSION}_amd64.deb"
+          test -s "$package" || { echo "::error::Expected DEB not found: $package"; exit 1; }
+          [[ "$(dpkg-deb --field "$package" Package)" == 'kwin6-script-minimize2tray' ]]
+          [[ "$(dpkg-deb --field "$package" Version)" == "$DEB_VERSION" ]]
+          [[ "$(dpkg-deb --field "$package" Architecture)" == 'amd64' ]]
+          dpkg-deb --contents "$package" | grep -F 'kcm_minimize2tray.so'
+          dpkg-deb --contents "$package" | grep -F 'trayiconplugin.so'
+          dpkg-deb --contents "$package" | grep -F 'com.github.luisbocanegra.minimize2tray/'
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          cp -v "$package" "$GITHUB_WORKSPACE/dist/kwin6-script-minimize2tray_${DEB_VERSION}_${LABEL}_amd64.deb"
+
+      - name: Upload distro-specific DEB artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pkg-${{ matrix.label }}
+          path: dist/*.deb
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish Release when all three builds pass
+    if: github.event_name == 'push' || inputs.publish == true
+    needs: [prepare, tumbleweed, debian_ubuntu]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - name: Download distribution packages only
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: pkg-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Verify all targets and generate checksum manifest
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          DEB_VERSION: ${{ needs.prepare.outputs.deb_version }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob dotglob
+          rpms=(release-assets/kwin6-script-minimize2tray-"$VERSION"-*.x86_64.rpm)
+          debian="release-assets/kwin6-script-minimize2tray_${DEB_VERSION}_debian13_amd64.deb"
+          ubuntu="release-assets/kwin6-script-minimize2tray_${DEB_VERSION}_ubuntu2604_amd64.deb"
+          assets=(release-assets/*)
+          [[ ${#rpms[@]} -eq 1 && ${#assets[@]} -eq 3 ]] || { echo '::error::Missing/duplicate or unexpected distribution package.'; exit 1; }
+          for package in "${rpms[@]}" "$debian" "$ubuntu"; do
+            [[ -f "$package" && ! -L "$package" && -s "$package" ]] || { echo "::error::Missing/empty or unsafe package: $package"; exit 1; }
+          done
+          (cd release-assets && sha256sum -- *.deb *.rpm > SHA256SUMS && cat SHA256SUMS)
+
+      - name: Publish new GitHub Release (never replace an existing one)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          [[ -n "$RELEASE_TAG" ]] || { echo '::error::Tag is required for publication.'; exit 1; }
+          # Query failures stop publication; they are never treated as an absent release.
+          existing="$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[] | select(.tag_name == env.RELEASE_TAG) | .id')"
+          if [[ -n "$existing" ]]; then
+            echo "::error::Release $RELEASE_TAG already exists. Refusing to overwrite it."; exit 1
+          fi
+          current_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/refs/tags/$RELEASE_TAG" --jq '.sha')"
+          [[ "$current_sha" == "$SOURCE_SHA" ]] || { echo '::error::Tag changed during the build. Refusing to publish.'; exit 1; }
+          gh release create "$RELEASE_TAG" release-assets/* --repo "$GITHUB_REPOSITORY" --verify-tag --draft --title "Minimize2Tray $RELEASE_TAG" --generate-notes
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false

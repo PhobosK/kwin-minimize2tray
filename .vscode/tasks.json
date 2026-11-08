@@ -1,0 +1,146 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Minimize2Tray: test current main on GitHub (no release)",
+      "type": "process",
+      "command": "gh",
+      "args": [
+        "workflow",
+        "run",
+        "release-packages.yml",
+        "--ref",
+        "main",
+        "-f",
+        "tag=",
+        "-f",
+        "publish=false"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "GH_HOST": "github.com",
+          "GH_REPO": "PhobosK/kwin-minimize2tray"
+        }
+      },
+      "problemMatcher": [],
+      "detail": "Requires release-packages.yml enabled on remote main and authenticated gh. Runs against PhobosK/kwin-minimize2tray; unpublished local edits are not sent."
+    },
+    {
+      "label": "Minimize2Tray: test existing tag on GitHub (no release)",
+      "type": "process",
+      "command": "bash",
+      "args": [
+        "--noprofile",
+        "--norc",
+        "-c",
+        "set -euo pipefail; tag=$1; core='(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)'; [[ \"$tag\" =~ ^v$core$ ]] || { echo 'Enter an existing tag in vX.Y.Z format, without leading zeroes.' >&2; exit 1; }; gh workflow run release-packages.yml --ref main -f \"tag=$tag\" -f \"publish=$2\"",
+        "minimize2tray-release",
+        "${input:releaseTag}",
+        "false"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "GH_HOST": "github.com",
+          "GH_REPO": "PhobosK/kwin-minimize2tray"
+        }
+      },
+      "problemMatcher": [],
+      "detail": "Requires release-packages.yml enabled on remote main and authenticated gh. Runs against PhobosK/kwin-minimize2tray; unpublished local edits are not sent."
+    },
+    {
+      "label": "Minimize2Tray: publish existing tag on GitHub",
+      "type": "process",
+      "command": "bash",
+      "args": [
+        "--noprofile",
+        "--norc",
+        "-c",
+        "set -euo pipefail; tag=$1; core='(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)'; [[ \"$tag\" =~ ^v$core$ ]] || { echo 'Enter an existing tag in vX.Y.Z format, without leading zeroes.' >&2; exit 1; }; gh workflow run release-packages.yml --ref main -f \"tag=$tag\" -f \"publish=$2\"",
+        "minimize2tray-release",
+        "${input:releaseTag}",
+        "true"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "GH_HOST": "github.com",
+          "GH_REPO": "PhobosK/kwin-minimize2tray"
+        }
+      },
+      "problemMatcher": [],
+      "detail": "Requires release-packages.yml enabled on remote main and authenticated gh. Runs against PhobosK/kwin-minimize2tray; unpublished local edits are not sent."
+    },
+    {
+      "label": "Minimize2Tray: create/push version tag (automatically publishes)",
+      "type": "process",
+      "command": "bash",
+      "args": [
+        "--noprofile",
+        "--norc",
+        "-c",
+        "set -euo pipefail\nfail() { printf '%s\\n' \"$*\" >&2; exit 1; }\nworkflow=.github/workflows/release-packages.yml\ntest -s \"$workflow\" || fail 'Required workflow missing: .github/workflows/release-packages.yml.'\ngit ls-files --error-unmatch \"$workflow\" >/dev/null || fail 'The enabled workflow must be committed first.'\ntest \"$(git branch --show-current)\" = main || fail 'Run this task on main.'\npending=$(git status --porcelain)\ntest -z \"$pending\" || fail 'Commit or set aside pending changes first.'\nfetch_url=$(git remote get-url origin)\npush_url=$(git remote get-url --push --all origin)\nfor url in \"$fetch_url\" \"$push_url\"; do\n  case \"$url\" in\n    https://github.com/PhobosK/kwin-minimize2tray|https://github.com/PhobosK/kwin-minimize2tray.git|git@github.com:PhobosK/kwin-minimize2tray|git@github.com:PhobosK/kwin-minimize2tray.git|ssh://git@github.com/PhobosK/kwin-minimize2tray|ssh://git@github.com/PhobosK/kwin-minimize2tray.git) ;;\n    *) fail 'origin must fetch and push only PhobosK/kwin-minimize2tray on github.com.' ;;\n  esac\ndone\nremote_main=$(git ls-remote --exit-code origin refs/heads/main) || fail 'Could not read remote main; nothing was tagged.'\nread -r remote_sha remote_ref <<< \"$remote_main\"\n[[ \"$remote_ref\" == refs/heads/main && \"$remote_sha\" == \"$(git rev-parse --verify 'HEAD^{commit}')\" ]] || fail 'Local main must match remote main; nothing was tagged.'\nversion=$(python3 -c 'import json; print(json.load(open(\"package/metadata.json\"))[\"KPlugin\"][\"Version\"])')\ncore='(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)'\n[[ \"$version\" =~ ^$core$ ]] || fail 'Invalid version in metadata.json.'\ngrep -Fqx \"%{!?release_version:%global release_version $version}\" distro/rpm/kwin6-script-minimize2tray.spec || fail 'RPM spec version mismatch.'\nheader=$(head -n 1 distro/debian/changelog)\n[[ \"$header\" == \"kwin6-script-minimize2tray ($version-\"* ]] || fail 'Current Debian changelog version mismatch.'\ndeb_header='^kwin6-script-minimize2tray \\([0-9]+\\.[0-9]+\\.[0-9]+-[1-9][0-9]*\\) '\n[[ \"$header\" =~ $deb_header ]] || fail 'Invalid Debian revision.'\nstate=$(gh api repos/PhobosK/kwin-minimize2tray/actions/workflows/release-packages.yml --jq .state)\n[[ \"$state\" == active ]] || fail 'The remote release workflow must be enabled on main first.'\ntag=v$version\nif git show-ref --verify --quiet \"refs/tags/$tag\"; then fail \"Local tag $tag already exists.\"; else status=$?; [[ \"$status\" -eq 1 ]] || fail 'Could not inspect local tags.'; fi\nif git ls-remote --exit-code --tags origin \"refs/tags/$tag\"; then fail \"Remote tag $tag already exists.\"; else status=$?; [[ \"$status\" -eq 2 ]] || fail 'Could not read remote tags; nothing was tagged.'; fi\ngit tag -a \"$tag\" -m \"Release $tag\"\ngit push --no-follow-tags origin \"refs/tags/$tag:refs/tags/$tag\" || fail \"Push failed. Local tag $tag was kept; inspect it before retrying.\"\nprintf 'Pushed %s; GitHub Actions will build and publish its packages.\\n' \"$tag\""
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "GH_HOST": "github.com",
+          "GH_REPO": "PhobosK/kwin-minimize2tray"
+        }
+      },
+      "problemMatcher": [],
+      "detail": "Creates and pushes only a new version tag after checking clean main, the fork remote, remote main, matching package versions and the enabled workflow. The push publishes a release."
+    },
+    {
+      "label": "Minimize2Tray: show recent GitHub workflow runs",
+      "type": "process",
+      "command": "gh",
+      "args": [
+        "run",
+        "list",
+        "--workflow",
+        "release-packages.yml",
+        "--limit",
+        "10"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "GH_HOST": "github.com",
+          "GH_REPO": "PhobosK/kwin-minimize2tray"
+        }
+      },
+      "problemMatcher": [],
+      "detail": "Requires release-packages.yml enabled on remote main and authenticated gh. Runs against PhobosK/kwin-minimize2tray; unpublished local edits are not sent."
+    },
+    {
+      "label": "Minimize2Tray: watch newest workflow run (and report failure)",
+      "type": "process",
+      "command": "bash",
+      "args": [
+        "--noprofile",
+        "--norc",
+        "-c",
+        "set -euo pipefail; run_id=$(gh run list --workflow release-packages.yml --limit 1 --json databaseId --jq '.[0].databaseId'); test -n \"$run_id\" && test \"$run_id\" != null || { echo 'No matching run found.' >&2; exit 1; }; gh run watch \"$run_id\" --exit-status"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "GH_HOST": "github.com",
+          "GH_REPO": "PhobosK/kwin-minimize2tray"
+        }
+      },
+      "problemMatcher": [],
+      "detail": "Watches the most recent release-packages.yml run in your fork; concurrent runs may belong to another tag or branch."
+    }
+  ],
+  "inputs": [
+    {
+      "id": "releaseTag",
+      "type": "promptString",
+      "description": "Existing tag, including v (for example v2.0.0)",
+      "default": ""
+    }
+  ]
+}
