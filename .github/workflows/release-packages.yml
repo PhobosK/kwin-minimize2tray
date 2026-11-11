@@ -35,6 +35,9 @@ on:
 permissions:
   contents: read
 
+# Selected-tag builds must not read or poison shared Actions caches.
+cache-mode: none
+
 concurrency:
   group: packages-${{ github.workflow }}-${{ github.event_name == 'push' && github.ref_name || inputs.tag || github.sha }}
   cancel-in-progress: false
