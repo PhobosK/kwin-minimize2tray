@@ -1,3 +1,9 @@
+kwin6-script-minimize2tray (2.2.0-1) unstable; urgency=medium
+
+  * Disable shared cache access in release jobs.
+
+ -- PhobosK <PhobosK@users.noreply.github.com>  Wed, 11 Nov 2026 21:32:39 +0200
+
 kwin6-script-minimize2tray (2.1.0-1) unstable; urgency=medium
 
   * Add Gentoo and Arch Linux packaging and integrate release validation.
