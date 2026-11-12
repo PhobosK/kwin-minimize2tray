@@ -1,3 +1,10 @@
+kwin6-script-minimize2tray (2.3.0-1) unstable; urgency=medium
+
+  * Bind package builds to the immutable workflow commit.
+  * Run existing-tag builds in their tag context.
+
+ -- PhobosK <PhobosK@users.noreply.github.com>  Thu, 12 Nov 2026 18:17:58 +0200
+
 kwin6-script-minimize2tray (2.2.0-1) unstable; urgency=medium
 
   * Disable shared cache access in release jobs.
