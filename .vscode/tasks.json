@@ -34,7 +34,7 @@
         "--noprofile",
         "--norc",
         "-c",
-        "set -euo pipefail; tag=$1; core='(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)'; [[ \"$tag\" =~ ^v$core$ ]] || { echo 'Enter an existing tag in vX.Y.Z format, without leading zeroes.' >&2; exit 1; }; gh workflow run release-packages.yml --ref main -f \"tag=$tag\" -f \"publish=$2\"",
+        "set -euo pipefail; tag=$1; core='(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)'; [[ \"$tag\" =~ ^v$core$ ]] || { echo 'Enter an existing tag in vX.Y.Z format, without leading zeroes.' >&2; exit 1; }; gh workflow run release-packages.yml --ref \"$tag\" -f \"tag=$tag\" -f \"publish=$2\"",
         "minimize2tray-release",
         "${input:releaseTag}",
         "false"
@@ -47,7 +47,7 @@
         }
       },
       "problemMatcher": [],
-      "detail": "Checks the selected existing tag with all package targets, including Gentoo overlay validation, without publishing a release."
+      "detail": "Runs the workflow stored at the selected tag in that tag’s context, with all package targets and no publication."
     },
     {
       "label": "Minimize2Tray: publish existing tag on GitHub",
@@ -57,7 +57,7 @@
         "--noprofile",
         "--norc",
         "-c",
-        "set -euo pipefail; tag=$1; core='(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)'; [[ \"$tag\" =~ ^v$core$ ]] || { echo 'Enter an existing tag in vX.Y.Z format, without leading zeroes.' >&2; exit 1; }; gh workflow run release-packages.yml --ref main -f \"tag=$tag\" -f \"publish=$2\"",
+        "set -euo pipefail; tag=$1; core='(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)'; [[ \"$tag\" =~ ^v$core$ ]] || { echo 'Enter an existing tag in vX.Y.Z format, without leading zeroes.' >&2; exit 1; }; gh workflow run release-packages.yml --ref \"$tag\" -f \"tag=$tag\" -f \"publish=$2\"",
         "minimize2tray-release",
         "${input:releaseTag}",
         "true"
@@ -70,7 +70,7 @@
         }
       },
       "problemMatcher": [],
-      "detail": "Builds all package targets and validates the Gentoo overlay before publishing a new release. Existing releases are never replaced."
+      "detail": "Runs the workflow stored at the selected tag and publishes only after its package checks pass. Existing releases are never replaced."
     },
     {
       "label": "Minimize2Tray: create/push version tag (automatically publishes)",

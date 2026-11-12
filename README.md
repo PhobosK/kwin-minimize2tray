@@ -119,6 +119,8 @@ On Gentoo, register the prepared `overlay` directory as a local repository with 
 
 In GitHub Actions, the default `all` target covers Tumbleweed, Debian 13, Ubuntu 26.04 LTS, Arch Linux and the Gentoo overlay checks. The `archlinux` and `gentoo` selections run just those checks without publishing; publication requires `all`. Local VS Code tasks provide the same choices. A release contains the source archive, three RPM/DEB packages, the Arch binary and recipes, the Gentoo overlay and `SHA256SUMS`.
 
+Manual runs build the immutable commit selected by the workflow ref. To test an existing tag, use its VS Code task or `gh workflow run release-packages.yml --repo PhobosK/kwin-minimize2tray --ref v2.2.0 -f tag=v2.2.0 -f publish=false`. The `tag` input only verifies that ref; a run on `main` cannot select another tag’s source. Tag dispatch uses the workflow definition stored at that tag, so new workflow fixes require a new tag containing them. Shared Actions cache access remains disabled for release jobs.
+
 ### Developer build
 
 ```sh

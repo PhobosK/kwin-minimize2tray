@@ -1,9 +1,9 @@
 # GitHub discovers this workflow after it is committed and pushed.
-# Manual dispatch and the VS Code tasks require this workflow on remote main
-# (the default branch) and authenticated GitHub CLI for the local tasks.
-# Build-only: Actions > Build Minimize2Tray packages > Run workflow (leave tag blank).
-# Build a tag without publishing: enter vX.Y.Z and leave publish unchecked.
-# Publish: push a new vX.Y.Z tag, or dispatch an existing tag with publish checked.
+# Manual dispatch requires the workflow on the default branch. Local tasks use gh.
+# Build-only: dispatch main with tag blank and publish unchecked.
+# Existing tag: dispatch on that tag using the VS Code task or gh --ref vX.Y.Z.
+# The tag input only verifies the selected ref; it cannot choose different source.
+# Publish: push a new vX.Y.Z tag, or dispatch on a tag with publish checked.
 name: Build Minimize2Tray packages
 
 on:
@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Optional existing tag (vX.Y.Z). Blank = test the selected branch commit.'
+        description: 'Optional tag assertion (vX.Y.Z). Tag builds must run on that tag via --ref.'
         required: false
         type: string
         default: ''
@@ -56,12 +56,13 @@ jobs:
       archive_sha256: ${{ steps.source.outputs.archive_sha256 }}
     steps:
       - name: Validate inputs before checking out source
-        id: request
         shell: bash
         env:
-          REQUESTED_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+          REQUESTED_TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}
           WANT_PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
           SELECTED_SHA: ${{ github.sha }}
+          SELECTED_REF: ${{ github.ref }}
+          INPUT_TAG: ${{ inputs.tag }}
           TARGET: ${{ github.event_name == 'push' && 'all' || inputs.target }}
         run: |
           set -euo pipefail
@@ -76,17 +77,18 @@ jobs:
           if [[ "$WANT_PUBLISH" == 'true' && -z "$REQUESTED_TAG" ]]; then
             echo '::error::Publishing requires an existing version tag.'; exit 1
           fi
-          if [[ -n "$REQUESTED_TAG" ]]; then
-            echo "ref=refs/tags/$REQUESTED_TAG" >> "$GITHUB_OUTPUT"
-          else
-            [[ "$SELECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
-            echo "ref=$SELECTED_SHA" >> "$GITHUB_OUTPUT"
+          [[ "$SELECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          if [[ -n "$REQUESTED_TAG" && "$SELECTED_REF" != "refs/tags/$REQUESTED_TAG" ]]; then
+            echo '::error::Tag builds must be dispatched on the tag itself (gh --ref vX.Y.Z or the VS Code tag task).'; exit 1
+          fi
+          if [[ -n "$INPUT_TAG" && "$INPUT_TAG" != "$REQUESTED_TAG" ]]; then
+            echo '::error::Tag input does not match the workflow ref.'; exit 1
           fi
 
-      - name: Check out selected commit or exact tag
+      - name: Check out the immutable workflow commit
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          ref: ${{ steps.request.outputs.ref }}
+          ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 1
 
@@ -94,19 +96,19 @@ jobs:
         id: source
         shell: bash
         env:
-          REQUESTED_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
-          PUSH_SHA: ${{ github.event_name == 'push' && github.sha || '' }}
+          REQUESTED_TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}
+          WORKFLOW_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           tag="$REQUESTED_TAG"
           core='(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
           source_sha="$(git rev-parse --verify 'HEAD^{commit}')"
           [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]]
-          if [[ -n "$PUSH_SHA" ]]; then
-            pushed_sha="$(git rev-parse --verify "$PUSH_SHA^{commit}")"
-            [[ "$source_sha" == "$pushed_sha" ]] || { echo '::error::Tag no longer matches the pushed commit.'; exit 1; }
-          fi
+          workflow_commit="$(git rev-parse --verify "$WORKFLOW_SHA^{commit}")"
+          [[ "$source_sha" == "$workflow_commit" ]] || { echo '::error::Source does not match the workflow commit.'; exit 1; }
           if [[ -n "$tag" ]]; then
+            # Resolve the tag only to verify it; never check out input-selected code.
+            git fetch --no-tags --depth=1 origin "refs/tags/$tag:refs/tags/$tag"
             tagged_sha="$(git rev-parse --verify "refs/tags/$tag^{commit}")"
             if [[ "$tagged_sha" != "$source_sha" ]]; then
               echo "::error::Tag $tag does not point to the checked-out commit."; exit 1
@@ -181,10 +183,10 @@ jobs:
           zypper --non-interactive refresh
           zypper --non-interactive install --no-recommends rpm-build git ca-certificates tar gzip make
 
-      - name: Check out packaging specification from pinned commit
+      - name: Check out RPM packaging from the workflow commit
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          ref: ${{ needs.prepare.outputs.source_sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Install build dependencies declared by the RPM spec
@@ -277,10 +279,10 @@ jobs:
           fi
           apt-get install -y --no-install-recommends ca-certificates git python3 dpkg-dev build-essential debhelper devscripts equivs
 
-      - name: Check out Debian packaging tools from pinned commit
+      - name: Check out Debian packaging from the workflow commit
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          ref: ${{ needs.prepare.outputs.source_sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Download verified source archive
