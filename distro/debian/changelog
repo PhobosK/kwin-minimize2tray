@@ -1,3 +1,10 @@
+kwin6-script-minimize2tray (2.4.2-1) unstable; urgency=medium
+
+  * Simplify inline rule help and prevent accidental Match changes.
+  * Improve tray option ordering and handbook presentation.
+
+ -- PhobosK <PhobosK@users.noreply.github.com>  Sat, 14 Nov 2026 20:22:28 +0200
+
 kwin6-script-minimize2tray (2.4.1-1) unstable; urgency=medium
 
   * Prepare a patch release for fresh tag-based package builds.
