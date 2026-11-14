@@ -1,3 +1,10 @@
+kwin6-script-minimize2tray (2.4.0-1) unstable; urgency=medium
+
+  * Improve launcher icons, window rules and KDE help.
+  * Add icon overrides, global startup and safer window detection.
+
+ -- PhobosK <PhobosK@users.noreply.github.com>  Sat, 14 Nov 2026 10:37:15 +0200
+
 kwin6-script-minimize2tray (2.3.0-1) unstable; urgency=medium
 
   * Bind package builds to the immutable workflow commit.
