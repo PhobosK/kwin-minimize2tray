@@ -1,4 +1,7 @@
 #include "rules.h"
+#include "applicationidentity.h"
+#include <QCache>
+#include <QRegularExpression>
 
 #include <KConfigGroup>
 #include <KService>
@@ -64,8 +67,11 @@ QVariantMap newRule() {
         {QStringLiteral("description"), QString()},
         {QStringLiteral("enabled"), true},
         {QStringLiteral("autoCreated"), false},
-        {QStringLiteral("behavior"), QVariantMap{{QStringLiteral("autoPin"), false},
-                                                 {QStringLiteral("startInTray"), true},
+        {QStringLiteral("iconOverride"),
+         QVariantMap{{QStringLiteral("enabled"), false}, {QStringLiteral("path"), QString()}}},
+        {QStringLiteral("behavior"), QVariantMap{{QStringLiteral("inheritStartup"), true},
+                                                 {QStringLiteral("autoPin"), false},
+                                                 {QStringLiteral("startInTray"), false},
                                                  {QStringLiteral("minimizeToTray"), QStringLiteral("inherit")},
                                                  {QStringLiteral("closeToTray"), false},
                                                  {QStringLiteral("startupProtection"), false},
@@ -107,6 +113,8 @@ QVariantMap automaticRule(const QVariantMap &window, const QVariantMap &widerRul
     }
     rule[QStringLiteral("match")] = match;
     auto behavior = rule.value(QStringLiteral("behavior")).toMap();
+    behavior[QStringLiteral("inheritStartup")] = false;
+    behavior[QStringLiteral("startInTray")] = true;
     behavior[QStringLiteral("minimizeToTray")] = QStringLiteral("enabled");
     rule[QStringLiteral("behavior")] = behavior;
     auto identity = window.value(QStringLiteral("resourceClass")).toString();
@@ -162,8 +170,18 @@ QVariantMap automaticRule(const QVariantMap &window, const QVariantMap &widerRul
     return rule;
 }
 
+static QRegularExpression boundedExpression(const QString &pattern) {
+    // Qt uses PCRE2. Limits keep user patterns from monopolizing KWin's thread.
+    static QCache<QString, QRegularExpression> cache(256);
+    if (const auto cached = cache.object(pattern))
+        return *cached;
+    QRegularExpression expression(QStringLiteral("(*LIMIT_MATCH=10000)(*LIMIT_DEPTH=100)") + pattern);
+    cache.insert(pattern, new QRegularExpression(expression));
+    return expression;
+}
+
 QString encodeRules(const QVariantList &rules, bool indented) {
-    return QString::fromUtf8(QJsonDocument(QJsonObject{{QStringLiteral("schemaVersion"), 7},
+    return QString::fromUtf8(QJsonDocument(QJsonObject{{QStringLiteral("schemaVersion"), 8},
                                                        {QStringLiteral("rules"), QJsonArray::fromVariantList(rules)}})
                                  .toJson(indented ? QJsonDocument::Indented : QJsonDocument::Compact));
 }
@@ -203,7 +221,7 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
     const auto schema = root.value(QStringLiteral("schemaVersion"));
     if (!onlyKeys(root, {QStringLiteral("schemaVersion"), QStringLiteral("rules")}) ||
         (schema != QJsonValue(1) && schema != QJsonValue(2) && schema != QJsonValue(3) && schema != QJsonValue(4) &&
-         schema != QJsonValue(5) && schema != QJsonValue(6) && schema != QJsonValue(7)) ||
+         schema != QJsonValue(5) && schema != QJsonValue(6) && schema != QJsonValue(7) && schema != QJsonValue(8)) ||
         !root.value(QStringLiteral("rules")).isArray()) {
         return invalid(text("Unsupported rule format or schema version."));
     }
@@ -216,7 +234,8 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
     QVariantList result;
     const QSet<QString> conditions{QStringLiteral("desktopFile"),  QStringLiteral("resourceClass"),
                                    QStringLiteral("resourceName"), QStringLiteral("legacyClass"),
-                                   QStringLiteral("role"),         QStringLiteral("caption")};
+                                   QStringLiteral("role"),         QStringLiteral("resourceClassComplete"),
+                                   QStringLiteral("caption")};
     auto matchKeys = conditions;
     matchKeys.insert(QStringLiteral("windowTypes"));
     matchKeys.insert(QStringLiteral("includeChildren"));
@@ -226,6 +245,8 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
         ruleKeys.insert(QStringLiteral("behavior"));
     if (version >= 5)
         ruleKeys.insert(QStringLiteral("createdAt"));
+    if (version >= 8)
+        ruleKeys.insert(QStringLiteral("iconOverride"));
     if (version >= 7)
         ruleKeys.insert(QStringLiteral("autoCreated"));
     for (const auto &value : array) {
@@ -251,6 +272,18 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
         }
         if (version >= 7 && !rule.value(QStringLiteral("autoCreated")).isBool())
             return invalid(text("The automatically created flag must be a boolean setting."));
+        if (version >= 8) {
+            const auto icon = rule.value(QStringLiteral("iconOverride")).toObject();
+            if (!rule.value(QStringLiteral("iconOverride")).isObject() || icon.size() != 2 ||
+                !onlyKeys(icon, {QStringLiteral("enabled"), QStringLiteral("path")}) ||
+                !icon.value(QStringLiteral("enabled")).isBool() ||
+                !validString(icon.value(QStringLiteral("path")), 4096) ||
+                (!icon.value(QStringLiteral("path")).toString().isEmpty() &&
+                 !validIconPath(icon.value(QStringLiteral("path")).toString())) ||
+                (icon.value(QStringLiteral("enabled")).toBool() &&
+                 icon.value(QStringLiteral("path")).toString().isEmpty()))
+                return invalid(text("Choose a local desktop file or icon for the tray icon override."));
+        }
         ids.insert(normalizedId);
         if (schema != QJsonValue(1)) {
             const auto behavior = rule.value(QStringLiteral("behavior"));
@@ -261,6 +294,8 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
                                 QStringLiteral("minimizeToTray"), QStringLiteral("closeToTray")};
             if (version >= 4)
                 keys.insert(QStringLiteral("startupProtection"));
+            if (version >= 8)
+                keys.insert(QStringLiteral("inheritStartup"));
             if (version >= 6)
                 keys.insert(QStringLiteral("terminateOnLogout"));
             if (!behavior.isObject() || !onlyKeys(object, keys) ||
@@ -276,13 +311,21 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
                   object.value(QStringLiteral("startInTray")).toBool()))) {
                 return invalid(text("A rule has invalid action settings or conflicting startup actions."));
             }
+            if (version >= 8 && (!object.value(QStringLiteral("inheritStartup")).isBool() ||
+                                 (object.value(QStringLiteral("inheritStartup")).toBool() &&
+                                  (object.value(QStringLiteral("autoPin")).toBool() ||
+                                   object.value(QStringLiteral("startInTray")).toBool()))))
+                return invalid(text("The global startup choice conflicts with an explicit startup action."));
             if (version >= 4 && (!object.value(QStringLiteral("startupProtection")).isBool() ||
                                  (object.value(QStringLiteral("startupProtection")).toBool() &&
-                                  !object.value(QStringLiteral("startInTray")).toBool()))) {
+                                  !object.value(QStringLiteral("startInTray")).toBool() &&
+                                  !object.value(QStringLiteral("inheritStartup")).toBool()))) {
                 return invalid(text("Startup protection requires Start in tray and a boolean setting."));
             }
         }
         const auto match = rule.value(QStringLiteral("match")).toObject();
+        if (version < 8 && match.contains(QStringLiteral("resourceClassComplete")))
+            return invalid(text("Whole window class requires rule schema version 8 or later."));
         const auto types = match.value(QStringLiteral("windowTypes"));
         if (!onlyKeys(match, matchKeys) || !types.isArray() || types.toArray().isEmpty() ||
             types.toArray().size() > 3 || !match.value(QStringLiteral("includeChildren")).isBool()) {
@@ -309,14 +352,19 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
             if (!match.value(key).isObject() ||
                 !onlyKeys(condition, {QStringLiteral("operator"), QStringLiteral("value")}) ||
                 !validString(condition.value(QStringLiteral("value")), 1024, false) ||
-                (op != QLatin1String("equals") && (identity || op != QLatin1String("contains")))) {
-                return invalid(text("A matching condition is invalid. Application identities require an exact match."));
+                (!QStringList{QStringLiteral("equals"), QStringLiteral("contains"), QStringLiteral("regexp")}.contains(
+                     op) ||
+                 (version < 8 && op != QLatin1String("equals") && (identity || op != QLatin1String("contains"))))) {
+                return invalid(text("A matching condition has an invalid operator or value."));
             }
             const QString pattern = condition.value(QStringLiteral("value")).toString();
-            if (identity && (protectedIdentity(pattern) ||
-                             (key != QLatin1String("legacyClass") &&
-                              (pattern.contains(QLatin1Char('/')) || pattern.contains(QLatin1Char('\\')) ||
-                               pattern.contains(QLatin1Char(':')))))) {
+            if (op == QLatin1String("regexp") && !boundedExpression(pattern).isValid())
+                return invalid(text("A regular expression is invalid or exceeds the supported complexity."));
+            if (identity && op == QLatin1String("equals") &&
+                (protectedIdentity(pattern) ||
+                 (key != QLatin1String("legacyClass") &&
+                  (pattern.contains(QLatin1Char('/')) || pattern.contains(QLatin1Char('\\')) ||
+                   pattern.contains(QLatin1Char(':')))))) {
                 return invalid(
                     text("Configuration hosts, Minimize2Tray itself and paths cannot be used as application targets."));
             }
@@ -329,6 +377,10 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
             !rule.value(QStringLiteral("behavior")).toObject().value(QStringLiteral("terminateOnLogout")).isBool())
             return invalid(text("Quit on logout must be a boolean setting."));
         auto decoded = rule.toVariantMap();
+        if (version < 8) {
+            decoded[QStringLiteral("iconOverride")] =
+                QVariantMap{{QStringLiteral("enabled"), false}, {QStringLiteral("path"), QString()}};
+        }
         if (schema == QJsonValue(1) || schema == QJsonValue(2)) {
             // Upgrade in memory; leave the stored document intact until Apply/OK.
             const bool start = schema == QJsonValue(1) ||
@@ -347,6 +399,12 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
             auto behavior = decoded.value(QStringLiteral("behavior")).toMap();
             behavior.insert(QStringLiteral("terminateOnLogout"), false);
             decoded.insert(QStringLiteral("behavior"), behavior);
+        }
+        if (version < 8) {
+            auto behavior = decoded.value(QStringLiteral("behavior")).toMap();
+            // Preserve every existing rule's explicit startup choice.
+            behavior[QStringLiteral("inheritStartup")] = false;
+            decoded[QStringLiteral("behavior")] = behavior;
         }
         if (version < 5)
             decoded.insert(QStringLiteral("createdAt"), QVariant());
@@ -370,6 +428,10 @@ static QVariantList legacyRules(const KConfigGroup &group, QString &error) {
         seen.insert(name);
         auto rule = newRule();
         rule[QStringLiteral("createdAt")] = QVariant(); // Original creation time is unknown.
+        auto behavior = rule.value(QStringLiteral("behavior")).toMap();
+        behavior[QStringLiteral("inheritStartup")] = false;
+        behavior[QStringLiteral("startInTray")] = true;
+        rule[QStringLiteral("behavior")] = behavior;
         const bool installedIdentity =
             !name.contains(QLatin1Char('/')) && !name.contains(QLatin1Char('\\')) && !name.contains(QLatin1Char(':'));
         const auto service = installedIdentity ? KService::serviceByStorageId(name.endsWith(QLatin1String(".desktop"))
@@ -441,7 +503,12 @@ QVariantMap readSettings(KConfig &config) {
     return {{QStringLiteral("debugEnabled"), group.readEntry("debugEnabled", false)},
             {QStringLiteral("countUseDot"), group.readEntry("countUseDot", false)},
             {QStringLiteral("countDisplayLimit"), std::clamp(group.readEntry("countDisplayLimit", 99), 1, 9999)},
-            {QStringLiteral("hideOnMinimize"), group.readEntry("hideOnMinimize", false)}};
+            {QStringLiteral("hideOnMinimize"), group.readEntry("hideOnMinimize", false)},
+            {QStringLiteral("startupAction"),
+             QStringList{QStringLiteral("none"), QStringLiteral("pin"), QStringLiteral("hide")}.contains(
+                 group.readEntry("startupAction", QStringLiteral("hide")))
+                 ? group.readEntry("startupAction", QStringLiteral("hide"))
+                 : QStringLiteral("hide")}};
 }
 
 QString windowType(const QVariantMap &window) {
@@ -493,27 +560,45 @@ QString matchFailure(const QVariantMap &rule, const QVariantMap &window) {
             continue;
         }
         const auto condition = it.value().toMap();
-        QString actual = window.value(it.key()).toString();
+        QString actual = matchingProperties(window).value(it.key()).toString();
         QString wanted = condition.value(QStringLiteral("value")).toString();
         if (it.key() == QLatin1String("legacyClass")) {
-            if (window.value(QStringLiteral("resourceName")).toString() != wanted &&
-                window.value(QStringLiteral("resourceClass")).toString() != wanted) {
+            const auto op = condition.value(QStringLiteral("operator")).toString();
+            const auto matches = [&](const QString &actual) {
+                return op == QLatin1String("contains") ? actual.contains(wanted)
+                       : op == QLatin1String("regexp") ? boundedExpression(wanted).match(actual.left(4096)).hasMatch()
+                                                       : actual == wanted;
+            };
+            if (!matches(window.value(QStringLiteral("resourceName")).toString()) &&
+                !matches(window.value(QStringLiteral("resourceClass")).toString())) {
                 return text("Different class or instance");
             }
             continue;
         }
         if (it.key() == QLatin1String("desktopFile")) {
-            actual = desktopIdentity(actual);
-            wanted = desktopIdentity(wanted);
+            const auto app = applicationService(window);
+            actual = app ? app->desktopEntryName() : desktopIdentity(actual);
+            if (condition.value(QStringLiteral("operator")) == QLatin1String("equals")) {
+                wanted = desktopIdentity(wanted);
+                const auto expected = KService::serviceByStorageId(wanted + QStringLiteral(".desktop"));
+                if (expected && expected->isApplication()) wanted = expected->desktopEntryName();
+            }
         }
-        const bool matches = condition.value(QStringLiteral("operator")) == QLatin1String("contains")
-                                 ? actual.contains(wanted, Qt::CaseSensitive)
-                                 : actual == wanted;
+        const auto op = condition.value(QStringLiteral("operator")).toString();
+        const bool rawDesktopMatch = it.key() == QLatin1String("desktopFile") && op == QLatin1String("equals") &&
+                                     desktopIdentity(window.value(QStringLiteral("desktopFile")).toString()) == wanted;
+        const bool matches =
+            rawDesktopMatch ||
+            (op == QLatin1String("contains") ? actual.contains(wanted, Qt::CaseSensitive)
+             : op == QLatin1String("regexp") ? boundedExpression(wanted).match(actual.left(4096)).hasMatch()
+                                             : actual == wanted);
         if (!matches) {
             if (it.key() == QLatin1String("desktopFile"))
                 return text("Different application");
             if (it.key() == QLatin1String("resourceClass"))
                 return text("Different window class");
+            if (it.key() == QLatin1String("resourceClassComplete"))
+                return text("Different whole window class");
             if (it.key() == QLatin1String("resourceName"))
                 return text("Different window instance");
             if (it.key() == QLatin1String("role"))
@@ -527,7 +612,8 @@ QString matchFailure(const QVariantMap &rule, const QVariantMap &window) {
 QString ruleSummary(const QVariantMap &rule) {
     const auto match = rule.value(QStringLiteral("match")).toMap();
     QStringList parts;
-    for (const auto *key : {"desktopFile", "resourceClass", "resourceName", "legacyClass", "role", "caption"}) {
+    for (const auto *key :
+         {"desktopFile", "resourceClass", "resourceName", "resourceClassComplete", "legacyClass", "role", "caption"}) {
         const auto value = match.value(QLatin1String(key)).toMap().value(QStringLiteral("value")).toString();
         if (!value.isEmpty()) {
             QString label;
@@ -535,6 +621,8 @@ QString ruleSummary(const QVariantMap &rule) {
                 label = text("App");
             else if (qstrcmp(key, "resourceClass") == 0)
                 label = text("Class");
+            else if (qstrcmp(key, "resourceClassComplete") == 0)
+                label = text("Whole class");
             else if (qstrcmp(key, "resourceName") == 0)
                 label = text("Instance");
             else if (qstrcmp(key, "legacyClass") == 0)
@@ -557,9 +645,10 @@ QString ruleSummary(const QVariantMap &rule) {
         parts.append(text("No child windows"));
     }
     const auto behavior = rule.value(QStringLiteral("behavior")).toMap();
-    parts.append(behavior.value(QStringLiteral("startInTray")).toBool() ? text("Start in tray")
-                 : behavior.value(QStringLiteral("autoPin")).toBool() ? text("Pin without initially hiding")
-                                                                     : text("No startup action"));
+    parts.append(behavior.value(QStringLiteral("inheritStartup")).toBool() ? text("Use global startup")
+                 : behavior.value(QStringLiteral("startInTray")).toBool()  ? text("Start in tray")
+                 : behavior.value(QStringLiteral("autoPin")).toBool()      ? text("Pin without initially hiding")
+                                                                           : text("No startup action"));
     if (behavior.value(QStringLiteral("startupProtection")).toBool())
         parts.append(text("Retry early startup restoration once"));
     const QString minimize = behavior.value(QStringLiteral("minimizeToTray")).toString();

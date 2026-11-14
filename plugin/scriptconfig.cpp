@@ -2,6 +2,7 @@
 #include "rules.h"
 #include "sessionprocess.h"
 #include "sessiontermination.h"
+#include <KSycoca>
 
 #include <KAboutApplicationDialog>
 #include <KAboutData>
@@ -26,6 +27,16 @@
 
 ScriptConfig::ScriptConfig(QObject *parent) : QObject(parent), m_config(QStringLiteral("kwinrc")) {
     m_elapsed.start();
+    m_detectionTimer.setSingleShot(true);
+    m_detectionTimer.setInterval(150000);
+    connect(&m_detectionTimer, &QTimer::timeout, this, &ScriptConfig::finishWindowDetection);
+    m_detectionWatcher.setConnection(QDBusConnection::sessionBus());
+    m_detectionWatcher.setWatchMode(QDBusServiceWatcher::WatchForUnregistration);
+    connect(&m_detectionWatcher, &QDBusServiceWatcher::serviceUnregistered, this, [this](const QString &owner) {
+        if (owner == m_detectionOwner)
+            finishWindowDetection();
+    });
+    connect(KSycoca::self(), &KSycoca::databaseChanged, this, &ScriptConfig::valuesChanged);
     m_reloadTimer.setSingleShot(true);
     m_reloadTimer.setInterval(50);
     connect(&m_reloadTimer, &QTimer::timeout, this, &ScriptConfig::reload);
@@ -44,6 +55,7 @@ ScriptConfig::ScriptConfig(QObject *parent) : QObject(parent), m_config(QStringL
 }
 
 ScriptConfig::~ScriptConfig() {
+    finishWindowDetection();
     // QProcess belongs to the application until it exits: never wait for a child
     // process on KWin's event loop, and never terminate an independently opened host.
     if (m_configProcess)
@@ -157,14 +169,23 @@ QVariantMap ScriptConfig::matchingBehavior(const QVariantMap &window) const {
     bool closeToTray = false;
     bool minimizeEnabled = false;
     bool minimizeDisabled = false;
+    QString iconOverride;
     for (const auto &value : m_values.value(QStringLiteral("rules")).toList()) {
         const auto rule = value.toMap();
         if (!Minimize2Tray::matchFailure(rule, window).isEmpty())
             continue;
         matched = true;
         const auto behavior = rule.value(QStringLiteral("behavior")).toMap();
-        autoPin = autoPin || behavior.value(QStringLiteral("autoPin")).toBool();
-        const bool start = behavior.value(QStringLiteral("startInTray")).toBool();
+        const bool inherit = behavior.value(QStringLiteral("inheritStartup")).toBool();
+        const auto global = m_values.value(QStringLiteral("startupAction")).toString();
+        autoPin =
+            autoPin || (inherit ? global == QLatin1String("pin") : behavior.value(QStringLiteral("autoPin")).toBool());
+        const bool start =
+            inherit ? global == QLatin1String("hide") : behavior.value(QStringLiteral("startInTray")).toBool();
+        const auto icon = rule.value(QStringLiteral("iconOverride")).toMap();
+        // Stored order provides a deterministic choice for overlapping overrides.
+        if (iconOverride.isEmpty() && icon.value(QStringLiteral("enabled")).toBool())
+            iconOverride = icon.value(QStringLiteral("path")).toString();
         startInTray = startInTray || start;
         startupProtection = startupProtection || (start && behavior.value(QStringLiteral("startupProtection")).toBool());
         closeToTray = closeToTray || behavior.value(QStringLiteral("closeToTray")).toBool();
@@ -175,9 +196,39 @@ QVariantMap ScriptConfig::matchingBehavior(const QVariantMap &window) const {
     // Explicit enable wins across matching rules; explicit disable overrides inherited defaults.
     const bool minimizeToTray = minimizeEnabled ||
         (!minimizeDisabled && m_values.value(QStringLiteral("hideOnMinimize")).toBool());
-    return {{QStringLiteral("matched"), matched}, {QStringLiteral("autoPin"), autoPin},
-            {QStringLiteral("startInTray"), startInTray}, {QStringLiteral("minimizeToTray"), minimizeToTray},
-            {QStringLiteral("closeToTray"), closeToTray}, {QStringLiteral("startupProtection"), startupProtection}};
+    return {{QStringLiteral("matched"), matched},
+            {QStringLiteral("autoPin"), autoPin},
+            {QStringLiteral("startInTray"), startInTray},
+            {QStringLiteral("minimizeToTray"), minimizeToTray},
+            {QStringLiteral("iconOverride"), iconOverride},
+            {QStringLiteral("closeToTray"), closeToTray},
+            {QStringLiteral("startupProtection"), startupProtection}};
+}
+
+bool ScriptConfig::beginWindowDetection(const QString &token) {
+    if (!calledFromDBus() || token.size() != 36 || QUuid(token).isNull() || !m_detectionToken.isEmpty())
+        return false;
+    m_detectionToken = token;
+    m_detectionOwner = message().service();
+    m_detectionWatcher.addWatchedService(m_detectionOwner);
+    m_detectionTimer.start();
+    Q_EMIT windowDetectionChanged(true);
+    return true;
+}
+
+void ScriptConfig::endWindowDetection(const QString &token) {
+    if (token == m_detectionToken && calledFromDBus() && message().service() == m_detectionOwner)
+        finishWindowDetection();
+}
+
+void ScriptConfig::finishWindowDetection() {
+    if (m_detectionToken.isEmpty())
+        return;
+    m_detectionTimer.stop();
+    m_detectionWatcher.removeWatchedService(m_detectionOwner);
+    m_detectionToken.clear();
+    m_detectionOwner.clear();
+    Q_EMIT windowDetectionChanged(false);
 }
 
 QVariantList ScriptConfig::windows() {

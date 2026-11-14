@@ -10,8 +10,8 @@ license=('GPL-3.0-only')
 depends=('libgcc' 'libstdc++' 'glibc' 'qt6-base>=6.6' 'qt6-declarative>=6.6'
          'kconfig>=6.0' 'kcoreaddons>=6.0' 'kcmutils>=6.0' 'kservice>=6.0'
          'kstatusnotifieritem>=6.0' 'kwindowsystem>=6.0' 'kxmlgui>=6.0'
-         'kwin>=6.0' 'plasma-workspace>=6.0')
-makedepends=('cmake>=3.19' 'extra-cmake-modules>=6.0' 'ninja'
+         'kwin>=6.0' 'plasma-workspace>=6.0' 'khelpcenter')
+makedepends=('kdoctools>=6.0' 'cmake>=3.19' 'extra-cmake-modules>=6.0' 'ninja'
              'linux-api-headers>=6.13' 'vulkan-headers')
 _source_name="kwin-minimize2tray-${pkgver}.tar.gz"
 _source_dir="kwin-minimize2tray-${pkgver}"

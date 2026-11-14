@@ -1,7 +1,7 @@
 #include "trayicon.h"
+#include "applicationidentity.h"
 #include <KService>
 #include <KSycoca>
-#include <kstatusnotifieritem_version.h>
 #include <QAction>
 #include <QDBusArgument>
 #include <QDBusConnection>
@@ -21,6 +21,7 @@
 #include <QTimer>
 #include <QVariantMap>
 #include <cmath>
+#include <kstatusnotifieritem_version.h>
 #include <limits>
 #include <utility>
 
@@ -356,6 +357,20 @@ void TrayIcon::setUrgent(bool urgent) {
     }
 }
 
+void TrayIcon::setWindowProperties(const QVariantMap &properties) {
+    if (m_windowProperties == properties)
+        return;
+    m_windowProperties = properties;
+    scheduleApplicationUpdate();
+}
+
+void TrayIcon::setIconOverride(const QString &path) {
+    if (m_iconOverride == path)
+        return;
+    m_iconOverride = path;
+    scheduleApplicationUpdate();
+}
+
 void TrayIcon::setXdgName(const QString &id) {
     if (id != m_xdgName) {
         m_xdgName = id;
@@ -376,27 +391,17 @@ void TrayIcon::initializeTrayIcon() {
     m_menu = new QMenu();
     m_menu->setToolTipsVisible(true);
 
-    QAction *showAction = new QAction("Show/Hide", m_menu);
+    QAction *showAction = new QAction(tr("Show/Hide"), m_menu);
     connect(showAction, &QAction::triggered, this, [this]() { emit requestShowHide(m_windowId); }, Qt::QueuedConnection);
     showAction->setToolTip(tr("Show or hide this window on its assigned activity and virtual desktop."));
     showAction->setIcon(QIcon::fromTheme(QStringLiteral("view-visible-symbolic")));
     m_menu->addAction(showAction);
 
-    QAction *unpinAction = new QAction("Unpin", m_menu);
+    QAction *unpinAction = new QAction(tr("Unpin"), m_menu);
     connect(unpinAction, &QAction::triggered, this, [this]() { emit requestUnpin(m_windowId); }, Qt::QueuedConnection);
     unpinAction->setToolTip(tr("Show this window and remove its tray icon."));
     unpinAction->setIcon(QIcon::fromTheme(QStringLiteral("window-unpin-symbolic")));
     m_menu->addAction(unpinAction);
-
-    m_menu->addSeparator();
-    auto aboutAction = m_menu->addAction(QIcon::fromTheme(QStringLiteral("help-about")), tr("About"));
-    aboutAction->setIconVisibleInMenu(true);
-    aboutAction->setToolTip(tr("About Minimize2Tray: version, authors, license and project website."));
-    connect(aboutAction, &QAction::triggered, this, &TrayIcon::requestAbout, Qt::QueuedConnection);
-    auto configureAction = m_menu->addAction(QIcon::fromTheme(QStringLiteral("configure")), tr("Configure…"));
-    configureAction->setIconVisibleInMenu(true);
-    configureAction->setToolTip(tr("Configure Minimize2Tray settings and window rules for all applications."));
-    connect(configureAction, &QAction::triggered, this, &TrayIcon::requestConfigure, Qt::QueuedConnection);
 
     m_menu->addSeparator();
     auto automaticRule = m_menu->addAction(QIcon::fromTheme(QStringLiteral("list-add")), tr("Add tray rule…"));
@@ -407,6 +412,16 @@ void TrayIcon::initializeTrayIcon() {
            "Create a narrower rule, or Cancel. You can review a new rule afterward."));
     connect(automaticRule, &QAction::triggered, this, &TrayIcon::requestAutomaticRule, Qt::QueuedConnection);
 
+    m_menu->addSeparator();
+    auto configureAction = m_menu->addAction(QIcon::fromTheme(QStringLiteral("configure")), tr("Configure…"));
+    configureAction->setIconVisibleInMenu(true);
+    configureAction->setToolTip(tr("Configure Minimize2Tray settings and window rules for all applications."));
+    connect(configureAction, &QAction::triggered, this, &TrayIcon::requestConfigure, Qt::QueuedConnection);
+
+    auto aboutAction = m_menu->addAction(QIcon::fromTheme(QStringLiteral("help-about")), tr("About"));
+    aboutAction->setIconVisibleInMenu(true);
+    aboutAction->setToolTip(tr("About Minimize2Tray: version, authors, license and project website."));
+    connect(aboutAction, &QAction::triggered, this, &TrayIcon::requestAbout, Qt::QueuedConnection);
     m_menu->addSeparator();
     auto quitAction = m_menu->addAction(QIcon::fromTheme(QStringLiteral("application-exit")), tr("Quit"));
     quitAction->setToolTip(tr("Close this window. Other windows of the application may remain open."));
@@ -467,7 +482,9 @@ void TrayIcon::updateApplication() {
     if (!desktopId.isEmpty() && !desktopId.endsWith(QLatin1String(".desktop"))) {
         desktopId.append(QLatin1String(".desktop"));
     }
-    const auto service = desktopId.isEmpty() ? KService::Ptr() : KService::serviceByStorageId(desktopId);
+    auto properties = m_windowProperties;
+    properties[QStringLiteral("desktopFile")] = m_xdgName;
+    const auto service = Minimize2Tray::applicationService(properties);
     const QString newName = service ? service->name() : m_xdgName;
     if (m_appName != newName) {
         m_appName = newName;
@@ -492,6 +509,13 @@ void TrayIcon::updateApplication() {
                 }
             }
         }
+    }
+    if (!m_iconOverride.isEmpty()) {
+        // An explicit override wins; missing/unreadable files display a clear fallback.
+        m_desktopIcon = Minimize2Tray::explicitTrayIcon(m_iconOverride);
+        if (m_desktopIcon.pixmap(22, 22).isNull())
+            m_desktopIcon = QIcon::fromTheme(QStringLiteral("application-x-executable"));
+        m_desktopIconName.clear();
     }
     setLauncherUrl(desktopId.isEmpty() ? QString() : QStringLiteral("application://") + desktopId);
     trayIcon->setToolTipSubTitle(m_xdgName);

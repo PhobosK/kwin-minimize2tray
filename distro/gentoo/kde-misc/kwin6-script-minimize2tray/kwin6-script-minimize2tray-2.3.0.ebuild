@@ -32,6 +32,7 @@ RDEPEND="
 		>=kde-frameworks/kservice-6.0:6
 		>=kde-frameworks/kstatusnotifieritem-6.0:6
 		>=kde-frameworks/kxmlgui-6.0:6
+		>=kde-apps/khelpcenter-24.02:6
 	)
 	session-termination? (
 		>=kde-plasma/kwin-6.8:6=
@@ -45,6 +46,7 @@ DEPEND="${RDEPEND}
 	)
 "
 BDEPEND="
+	native-plugin? ( >=kde-frameworks/kdoctools-6.0:6 )
 	>=kde-frameworks/extra-cmake-modules-6.0
 	session-termination? ( virtual/pkgconfig )
 "

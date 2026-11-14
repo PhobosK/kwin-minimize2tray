@@ -242,7 +242,7 @@ def extract(archive, target):
 def snapshot(target):
     target.mkdir()
     # Copy only build inputs, including unpublished edits; never copy .git, credentials or developer artifacts.
-    for name in ("CMakeLists.txt", "plugin", "package", "cmake", "LICENSE", "README.md", "CONTRIBUTING.md"):
+    for name in ("CMakeLists.txt", "plugin", "package", "cmake", "handbook", "LICENSE", "README.md", "CONTRIBUTING.md"):
         source = ROOT / name
         if not source.exists():
             continue

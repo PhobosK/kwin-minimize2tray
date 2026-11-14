@@ -35,7 +35,10 @@ function setup(window) {
         updateToolTip(window);
         scheduleWindow(window);
     });
-    watch(window.windowClassChanged, () => scheduleWindow(window, true));
+    watch(window.windowClassChanged, () => {
+        updateWindowIcon(window);
+        scheduleWindow(window, true);
+    });
     watch(window.windowRoleChanged, () => scheduleWindow(window, true));
     watch(window.transientChanged, () => scheduleWindow(window, true));
     watch(window.modalChanged, () => scheduleWindow(window, true));
@@ -114,6 +117,11 @@ function addTrayIcon(window, automatic = false) {
         "demandsAttention": window.demandsAttention
     });
     if (!trayItem) return false;
+    // A library already loaded in KWin can predate these optional icon properties.
+    if (typeof trayItem.windowProperties !== "undefined")
+        trayItem.windowProperties = {resourceClass: window.resourceClass, resourceName: window.resourceName};
+    if (typeof trayItem.iconOverride !== "undefined")
+        trayItem.iconOverride = scriptConfig.matchingBehavior(windowInfo(window)).iconOverride || "";
     trayItem.requestShowHide.connect(toggleShowHide);
     trayItem.requestClose.connect(closeWindow);
     trayItem.requestUnpin.connect(unpinIcon);
@@ -149,7 +157,33 @@ function removeTrayIcon(window) {
     debugLog("removed tray icon", windowId);
 }
 
+function setDetectionHostsHidden(hide) {
+    if (!hide) {
+        const hosts = detectionHosts;
+        detectionHosts = [];
+        hosts.forEach(saved => {
+            const current = Workspace.windows.find(window => window.internalId.toString() === saved.id);
+            if (current === saved.window && current.minimized) current.minimized = false;
+        });
+        return;
+    }
+    if (detectionHosts.length) return;
+    Workspace.windows.forEach(window => {
+        const info = windowInfo(window);
+        const ids = [info.desktopFile, info.resourceClass, info.resourceName].map(id =>
+            String(id || "").toLowerCase().replace(/\.desktop$/, ""));
+        const host = ids.some(id => ["systemsettings", "systemsettings5", "systemsettings6", "org.kde.systemsettings",
+                                    "kcmshell6", "org.kde.kcmshell6"].indexOf(id) !== -1) ||
+                     info.role.indexOf("minimize2tray-") === 0;
+        if (host && window.minimizable && !window.minimized && !window.specialWindow) {
+            detectionHosts.push({id: window.internalId.toString(), window: window});
+            window.minimized = true;
+        }
+    });
+}
+
 function restoreManagedWindows() {
+    setDetectionHostsHidden(false);
     debugLog("restoring managed windows on unload");
     shuttingDown = true;
     cancelAllStartupProtection();
@@ -481,6 +515,8 @@ function updateToolTip(window) {
 
 function updateWindowIcon(window) {
     if (window.internalId in trayIcons) {
+        if (typeof trayIcons[window.internalId].windowProperties !== "undefined")
+            trayIcons[window.internalId].windowProperties = {resourceClass: window.resourceClass, resourceName: window.resourceName};
         trayIcons[window.internalId].xdgName = window.desktopFileName;
         trayIcons[window.internalId].icon = window.icon;
     }
@@ -532,6 +568,8 @@ function reconcileWindows() {
         const previous = automaticMatches[windowId] || {matched: false, startInTray: false};
         const behavior = scriptConfig.matchingBehavior(windowInfo(window));
         automaticMatches[windowId] = behavior;
+        if (windowId in trayIcons && typeof trayIcons[windowId].iconOverride !== "undefined")
+            trayIcons[windowId].iconOverride = behavior.iconOverride || "";
         if (isProtectedWindow(window) || (!behavior.matched && !isValidWindow(window))) {
             removeTrayIcon(window);
             releaseHiddenWindow(window, true);

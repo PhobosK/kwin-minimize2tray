@@ -2,6 +2,8 @@
 
 #include <KConfig>
 #include <KDirWatch>
+#include <QDBusContext>
+#include <QDBusServiceWatcher>
 #include <QElapsedTimer>
 #include <QObject>
 #include <QPointer>
@@ -13,7 +15,7 @@ class QDialog;
 class QProcess;
 class SessionTermination;
 
-class ScriptConfig : public QObject {
+class ScriptConfig : public QObject, protected QDBusContext {
     Q_OBJECT
     Q_CLASSINFO("D-Bus Interface", "com.github.luisbocanegra.Minimize2Tray")
     Q_PROPERTY(QVariantMap values READ values NOTIFY valuesChanged)
@@ -35,16 +37,20 @@ class ScriptConfig : public QObject {
 
   public slots:
     Q_SCRIPTABLE QVariantList windows();
+    Q_SCRIPTABLE bool beginWindowDetection(const QString &token);
+    Q_SCRIPTABLE void endWindowDetection(const QString &token);
     Q_SCRIPTABLE bool applyAutomaticRule(const QString &windowId, const QString &ruleId);
 
   signals:
     void sessionClosing();
     void valuesChanged();
     void windowsRequested();
+    void windowDetectionChanged(bool active);
     void automaticRuleCreated(const QString &windowId);
 
   private:
     void reload();
+    void finishWindowDetection();
     void openConfiguration(bool automaticRule);
     void showDialog(QDialog *dialog, const QString &role);
     KConfig m_config;
@@ -54,6 +60,10 @@ class ScriptConfig : public QObject {
     QPointer<QProcess> m_configProcess;
     KDirWatch m_watch;
     QTimer m_reloadTimer;
+    QTimer m_detectionTimer;
+    QDBusServiceWatcher m_detectionWatcher;
+    QString m_detectionToken;
+    QString m_detectionOwner;
     QElapsedTimer m_elapsed;
     QVariantMap m_values;
     QVariantList m_windows;

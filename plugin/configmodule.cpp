@@ -1,21 +1,24 @@
+#include "applicationidentity.h"
 #include "configbackup.h"
 #include "rules.h"
+#include <QDesktopServices>
+#include <QImageReader>
+#include <QToolButton>
+#include <QUrl>
 
 #include <KCModule>
-#include <KApplicationTrader>
-#include <KSycoca>
 #include <KConfigGroup>
 #include <KPluginFactory>
 #include <KService>
 #include <KSharedConfig>
+#include <KSycoca>
 #include <QAbstractListModel>
 #include <QAction>
 #include <QApplication>
 #include <QCheckBox>
 #include <QClipboard>
-#include <QComboBox>
 #include <QCollator>
-#include <QGuiApplication>
+#include <QComboBox>
 #include <QDBusArgument>
 #include <QDBusConnection>
 #include <QDBusMessage>
@@ -24,11 +27,12 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
-#include <QFileDialog>
 #include <QEventLoopLocker>
+#include <QFileDialog>
 #include <QFontDatabase>
 #include <QFormLayout>
 #include <QGridLayout>
+#include <QGuiApplication>
 #include <QHeaderView>
 #include <QHelpEvent>
 #include <QJsonDocument>
@@ -38,10 +42,11 @@
 #include <QLineEdit>
 #include <QListView>
 #include <QLockFile>
-#include <QMouseEvent>
 #include <QMessageBox>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPlainTextEdit>
+#include <QPointer>
 #include <QPushButton>
 #include <QSaveFile>
 #include <QScreen>
@@ -146,9 +151,7 @@ void rememberDialog(QDialog *dialog, const QString &name, const QSize &size) {
 
 QString appName(const QVariantMap &info) {
     const QString id = desktopIdentity(info.value(QStringLiteral("desktopFile")).toString());
-    const auto service = id.isEmpty() || id.contains(QLatin1Char('/'))
-                             ? KService::Ptr()
-                             : KService::serviceByStorageId(id + QStringLiteral(".desktop"));
+    const auto service = applicationService(info);
     if (service && service->isApplication() && !service->name().isEmpty())
         return service->name();
     const auto className = info.value(QStringLiteral("resourceClass")).toString();
@@ -163,6 +166,8 @@ QString fieldLabel(const QString &key) {
         return QObject::tr("Application ID");
     if (key == QLatin1String("resourceClass"))
         return QObject::tr("Window class");
+    if (key == QLatin1String("resourceClassComplete"))
+        return QObject::tr("Whole window class");
     if (key == QLatin1String("resourceName"))
         return QObject::tr("Window instance");
     if (key == QLatin1String("legacyClass"))
@@ -174,23 +179,27 @@ QString fieldLabel(const QString &key) {
 
 QString fieldToolTip(const QString &key) {
     if (key == QLatin1String("desktopFile"))
-        return QObject::tr("The application's launcher ID, such as org.kde.konsole, with an optional .desktop suffix. "
-                           "Usually the best application identifier. Use Detect to obtain the actual value; matching "
+        return QObject::tr("The application's launcher ID, such as org.kde.konsole, with an optional .desktop suffix for Exact match. "
+                           "If the window omits its launcher ID, a unique installed launcher may be found from its "
+                           "class or executable metadata. Use Detect; matching "
                            "is case-sensitive.");
     if (key == QLatin1String("resourceClass"))
         return QObject::tr("The window class reported by the application. Often shared by all its windows. "
                            "Use Detect to obtain the exact value; matching is case-sensitive.");
+    if (key == QLatin1String("resourceClassComplete"))
+        return QObject::tr("Match the window instance and class together, separated by a space, as in KWin rules. "
+                           "Use Detect to obtain the complete value. Matching is case-sensitive.");
     if (key == QLatin1String("resourceName"))
         return QObject::tr("The window instance reported by the application. It can differ from the class, but is "
                            "not necessarily unique to one window. Use Detect; matching is case-sensitive.");
     if (key == QLatin1String("legacyClass"))
         return QObject::tr("An older imported condition that matches either the window class or the window instance "
-                           "exactly. Matching is case-sensitive.");
+                           "using the selected match mode. Matching is case-sensitive.");
     if (key == QLatin1String("role"))
         return QObject::tr("An application-defined window role, useful for distinguishing a main window from an "
                            "editor or tool window. Some applications do not provide one. Matching is case-sensitive.");
     return QObject::tr("The visible window title. It may change with the open file, page or application state. "
-                       "Contains can match a stable part of the title. Matching is case-sensitive.");
+                       "Substring match can match a stable part of the title. Matching is case-sensitive.");
 }
 
 QString autoCreatedHelp() {
@@ -204,8 +213,10 @@ QString ruleDisplayName(const QVariantMap &rule) {
     return rule.value(QStringLiteral("autoCreated")).toBool() ? QObject::tr("Auto-created · %1").arg(title) : title;
 }
 
-const QStringList fields{QStringLiteral("desktopFile"), QStringLiteral("resourceClass"), QStringLiteral("resourceName"),
-                         QStringLiteral("legacyClass"), QStringLiteral("role"),          QStringLiteral("caption")};
+const QStringList fields{QStringLiteral("desktopFile"),  QStringLiteral("resourceClass"),
+                         QStringLiteral("resourceName"), QStringLiteral("resourceClassComplete"),
+                         QStringLiteral("legacyClass"),  QStringLiteral("role"),
+                         QStringLiteral("caption")};
 
 class RuleModel : public QAbstractListModel {
   public:
@@ -325,9 +336,6 @@ class RuleDelegate : public QStyledItemDelegate {
     explicit RuleDelegate(QObject *parent) : QStyledItemDelegate(parent) {
         connect(KSycoca::self(), &KSycoca::databaseChanged, this, [this]() {
             m_icons.clear();
-            m_windowClasses.clear();
-            m_foldedIdentities.clear();
-            m_windowClassesReady = false;
             if (auto view = qobject_cast<QAbstractItemView *>(this->parent()))
                 view->viewport()->update();
         }, Qt::QueuedConnection);
@@ -358,8 +366,7 @@ class RuleDelegate : public QStyledItemDelegate {
         p->setPen(selected ? option.palette.highlight().color() : option.palette.mid().color());
         p->setBrush(selected ? option.palette.alternateBase() : option.palette.base());
         p->drawRoundedRect(r.adjusted(0, 0, -1, -1), 4, 4);
-        ruleIcon(rule.value(QStringLiteral("match")).toMap())
-            .paint(p, QRect(r.left() + 14, r.center().y() - 18, 36, 36));
+        ruleIcon(rule).paint(p, QRect(r.left() + 14, r.center().y() - 18, 36, 36));
         QRect textRect(r.left() + 64, r.top() + 12,
                        std::max(30, checkRect(r, option.fontMetrics).left() - r.left() - 72),
                        option.fontMetrics.height());
@@ -456,68 +463,176 @@ class RuleDelegate : public QStyledItemDelegate {
     }
 
   private:
-    QIcon ruleIcon(const QVariantMap &match) const {
-        QStringList identities;
-        for (const auto *key : {"desktopFile", "resourceClass", "resourceName", "legacyClass"})
-            identities.append(match.value(QLatin1String(key)).toMap().value(QStringLiteral("value")).toString());
-        // Include every identity; class-only rules must not share the empty desktop-ID cache entry.
-        const auto cacheKey = identities.join(QChar::Null);
-        const auto cached = m_icons.constFind(cacheKey);
-        if (cached != m_icons.cend()) return cached.value();
+    QIcon ruleIcon(const QVariantMap &rule) const {
+        const auto key = QJsonDocument(QJsonObject::fromVariantMap(rule)).toJson(QJsonDocument::Compact);
+        if (m_icons.contains(key))
+            return m_icons.value(key);
         QIcon icon;
-        for (const auto &identity : identities) {
-            // Only installed identities are allowed, never window/rule-supplied desktop paths.
-            if (identity.isEmpty() || identity.contains(QLatin1Char('/')) || identity.contains(QLatin1Char('\\')) ||
-                identity.contains(QLatin1Char(':')) || identity.contains(QChar::Null)) continue;
-            const auto desktop = identity.endsWith(QLatin1String(".desktop"))
-                                     ? identity : identity + QStringLiteral(".desktop");
-            auto service = KService::serviceByStorageId(desktop);
-            if (!service) {
-                if (!m_windowClassesReady) {
-                    // Build the metadata alias index once, not on every row repaint.
-                    const auto addAlias = [](auto &index, const QString &alias, const KService::Ptr &application) {
-                        if (alias.isEmpty()) return;
-                        if (!index.contains(alias))
-                            index.insert(alias, application);
-                        else if (const auto previous = index.value(alias);
-                                 previous && previous->storageId() != application->storageId())
-                            index[alias] = {}; // Never choose a random application for an ambiguous alias.
-                    };
-                    for (const auto &application : KApplicationTrader::query([](const KService::Ptr &) { return true; })) {
-                        const auto wmClass = application->property<QString>(QStringLiteral("StartupWMClass"));
-                        addAlias(m_windowClasses, wmClass, application);
-                        for (const auto &alias : {wmClass, application->desktopEntryName(),
-                                                 desktopIdentity(application->storageId())})
-                            addAlias(m_foldedIdentities, alias.toCaseFolded(), application);
-                    }
-                    m_windowClassesReady = true;
-                }
-                service = m_windowClasses.value(identity);
-                // Presentation-only fallback for legacy class capitalization. Rule
-                // matching remains case-sensitive, and only unique aliases are used.
-                if (!service && !m_windowClasses.contains(identity))
-                    service = m_foldedIdentities.value(desktopIdentity(identity).toCaseFolded());
+        const auto override = rule.value(QStringLiteral("iconOverride")).toMap();
+        if (override.value(QStringLiteral("enabled")).toBool()) {
+            icon = explicitTrayIcon(override.value(QStringLiteral("path")).toString());
+        } else {
+            QVariantMap properties;
+            const auto match = rule.value(QStringLiteral("match")).toMap();
+            for (const auto *field : {"desktopFile", "resourceClass", "resourceName", "legacyClass"}) {
+                const auto condition = match.value(QLatin1String(field)).toMap();
+                if (condition.value(QStringLiteral("operator")) == QLatin1String("equals"))
+                    properties[QLatin1String(field)] = condition.value(QStringLiteral("value"));
             }
-            if (!service || !service->isApplication()) continue;
-            const auto name = service->icon();
-            const auto candidate = QDir::isAbsolutePath(name) ? QIcon(name) : QIcon::fromTheme(name);
-            if (!candidate.pixmap(32, 32).isNull()) {
-                icon = candidate;
-                break;
+            if (!properties.contains(QStringLiteral("resourceClass")))
+                properties[QStringLiteral("resourceClass")] = properties.value(QStringLiteral("legacyClass"));
+            const auto wholeClass = match.value(QStringLiteral("resourceClassComplete")).toMap();
+            const auto wholeValue = wholeClass.value(QStringLiteral("value")).toString();
+            const auto separator = wholeValue.indexOf(QLatin1Char(' '));
+            if (wholeClass.value(QStringLiteral("operator")) == QLatin1String("equals") && separator >= 0 &&
+                properties.value(QStringLiteral("resourceClass")).toString().isEmpty()) {
+                properties[QStringLiteral("resourceName")] = wholeValue.left(separator);
+                properties[QStringLiteral("resourceClass")] = wholeValue.mid(separator + 1);
             }
+            const auto service = applicationService(properties);
+            if (service)
+                icon =
+                    QDir::isAbsolutePath(service->icon()) ? QIcon(service->icon()) : QIcon::fromTheme(service->icon());
         }
-        if (icon.isNull()) icon = QIcon::fromTheme(QStringLiteral("preferences-system-windows"));
-        m_icons.insert(cacheKey, icon);
+        if (icon.pixmap(32, 32).isNull())
+            icon = QIcon::fromTheme(QStringLiteral("preferences-system-windows"));
+        // Repaint caches must remain bounded while users repeatedly edit rules.
+        if (m_icons.size() >= MaxRules)
+            m_icons.clear();
+        m_icons.insert(key, icon);
         return icon;
     }
-    mutable QHash<QString, QIcon> m_icons;
-    mutable QHash<QString, KService::Ptr> m_windowClasses;
-    mutable QHash<QString, KService::Ptr> m_foldedIdentities;
-    mutable bool m_windowClassesReady = false;
+    mutable QHash<QByteArray, QIcon> m_icons;
   signals:
     void editRequested(const QString &id);
     void deleteRequested(const QString &id);
 };
+
+class WindowPicker : public QObject {
+  public:
+    using Finished = std::function<void(const QDBusPendingReply<QVariantMap> &)>;
+    WindowPicker(QObject *context, Finished finished) : QObject(context), finished(std::move(finished)) {
+        for (auto window : QApplication::topLevelWidgets()) {
+            if (window->isWindow() && window->isVisible() && !window->isMinimized() &&
+                window->windowType() != Qt::ToolTip && window->windowType() != Qt::Popup) {
+                visibleWindows.append(window);
+                window->hide();
+            }
+        }
+        token = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        auto begin = runtimeCall(QStringLiteral("beginWindowDetection"));
+        auto watcher = new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(begin, 3000), this);
+        whenFinished(watcher, this, [this](QDBusPendingCallWatcher *watcher) {
+            const QDBusPendingReply<bool> reply = *watcher;
+            watcher->deleteLater();
+            if (!reply.isError() && !reply.value()) {
+                restore();
+                const QDBusPendingReply<QVariantMap> failure(QDBusMessage::createError(
+                    QDBusError::Failed, tr("Another window selection is already running. Finish it first.")));
+                this->finished(failure);
+                deleteLater();
+                return;
+            }
+            // Allow minimization/visibility changes to reach the compositor before picking.
+            QTimer::singleShot(200, this, [this]() {
+                auto pick =
+                    QDBusMessage::createMethodCall(QStringLiteral("org.kde.KWin"), QStringLiteral("/KWin"),
+                                                   QStringLiteral("org.kde.KWin"), QStringLiteral("queryWindowInfo"));
+                auto watcher = new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(pick, 120000), this);
+                whenFinished(watcher, this, [this](QDBusPendingCallWatcher *watcher) {
+                    const QDBusPendingReply<QVariantMap> reply = *watcher;
+                    watcher->deleteLater();
+                    restore();
+                    this->finished(reply);
+                    deleteLater();
+                });
+            });
+        });
+    }
+    ~WindowPicker() override { restore(); }
+
+  private:
+    QDBusMessage runtimeCall(const QString &method) const {
+        auto call = QDBusMessage::createMethodCall(QStringLiteral("org.kde.KWin"), QStringLiteral("/Minimize2Tray"),
+                                                   QStringLiteral("com.github.luisbocanegra.Minimize2Tray"), method);
+        call.setArguments({token});
+        return call;
+    }
+    void restore() {
+        if (!token.isEmpty()) {
+            QDBusConnection::sessionBus().asyncCall(runtimeCall(QStringLiteral("endWindowDetection")));
+            token.clear();
+        }
+        // Restore parents before their modal children, without altering pre-minimized windows.
+        std::sort(visibleWindows.begin(), visibleWindows.end(), [](const auto &a, const auto &b) {
+            const auto depth = [](QWidget *w) {
+                int n = 0;
+                for (; w; w = w->parentWidget())
+                    ++n;
+                return n;
+            };
+            return depth(a.data()) < depth(b.data());
+        });
+        const auto windows = visibleWindows;
+        visibleWindows.clear();
+        for (const auto &window : windows)
+            if (window)
+                window->show();
+    }
+    QList<QPointer<QWidget>> visibleWindows;
+    QEventLoopLocker locker;
+    QString token;
+    Finished finished;
+};
+
+void openHandbook(const QString &page) {
+    QDesktopServices::openUrl(QUrl(QStringLiteral("help:/kwin-minimize2tray/") + page + QStringLiteral(".html")));
+}
+
+void addOptionHelp(QLayout *layout) {
+    for (int i = 0; i < layout->count(); ++i) {
+        auto item = layout->itemAt(i);
+        if (item->layout()) {
+            addOptionHelp(item->layout());
+            continue;
+        }
+        auto control = item->widget();
+        if (!control || control->toolTip().isEmpty() ||
+            !(qobject_cast<QCheckBox *>(control) || qobject_cast<QComboBox *>(control) ||
+              qobject_cast<QLineEdit *>(control) || qobject_cast<QPlainTextEdit *>(control) ||
+              qobject_cast<QSpinBox *>(control)))
+            continue;
+        auto wrapper = new QWidget(control->parentWidget());
+        auto row = new QHBoxLayout(wrapper);
+        row->setContentsMargins(0, 0, 0, 0);
+        auto marker = new QToolButton(wrapper);
+        marker->setObjectName(control->objectName() + QStringLiteral("Help"));
+        marker->setIcon(control->style()->standardIcon(QStyle::SP_TitleBarContextHelpButton));
+        marker->setAutoRaise(true);
+        marker->setFocusPolicy(Qt::StrongFocus);
+        marker->setAccessibleName(QObject::tr("Explain this option"));
+        marker->setToolTip(control->toolTip());
+        QObject::connect(marker, &QToolButton::clicked, control, [control, marker]() {
+            QToolTip::showText(marker->mapToGlobal(QPoint(0, marker->height())), control->toolTip(), marker);
+        });
+        // Keep hover help in sync when detected suggestions change an option's tooltip.
+        class HelpTip final : public QObject {
+          public:
+            HelpTip(QWidget *source, QWidget *target) : QObject(target), source(source), target(target) {}
+            bool eventFilter(QObject *, QEvent *event) override {
+                if (event->type() == QEvent::ToolTipChange)
+                    target->setToolTip(source->toolTip());
+                return false;
+            }
+            QWidget *source;
+            QWidget *target;
+        };
+        control->installEventFilter(new HelpTip(control, marker));
+        delete layout->replaceWidget(control, wrapper, Qt::FindDirectChildrenOnly);
+        row->addWidget(control, 1);
+        row->addWidget(marker, 0, Qt::AlignTop);
+    }
+}
 
 class RuleDialog : public QDialog {
     Q_OBJECT
@@ -565,16 +680,20 @@ class RuleDialog : public QDialog {
         auto actions = new QFormLayout;
         m_startup = new QComboBox;
         m_startup->setObjectName(QStringLiteral("startupAction"));
-        m_startup->setToolTip(toolTipText(tr(
-            "Choose what happens when a window first matches: leave it alone, add a tray icon while keeping its "
-            "current visibility, or hide it in the tray. Also applies to existing windows when rules are applied.")));
+        m_startup->setToolTip(toolTipText(
+            tr("Choose what happens when a window first matches: leave it alone, add a tray icon while keeping its "
+               "current visibility, or hide it in the tray. Use global startup follows the Tray & badges page. "
+               "Also applies to existing windows when rules are applied.")));
+        m_startup->addItem(tr("Use global startup"), QStringLiteral("inherit"));
         m_startup->addItem(tr("No startup action"), QStringLiteral("none"));
         m_startup->addItem(tr("Pin without initially hiding"), QStringLiteral("pin"));
         m_startup->addItem(tr("Start in tray"), QStringLiteral("hide"));
-        m_startup->setCurrentIndex(behavior.value(QStringLiteral("startInTray")).toBool() ? 2
-                                   : behavior.value(QStringLiteral("autoPin")).toBool()   ? 1
-                                                                                          : 0);
-        comboToolTips(m_startup, {tr("Leave the window as it is when the rule first matches."),
+        m_startup->setCurrentIndex(behavior.value(QStringLiteral("inheritStartup")).toBool() ? 0
+                                   : behavior.value(QStringLiteral("startInTray")).toBool()  ? 3
+                                   : behavior.value(QStringLiteral("autoPin")).toBool()      ? 2
+                                                                                             : 1);
+        comboToolTips(m_startup, {tr("Follow Startup on the Tray & badges page."),
+                                  tr("Leave the window as it is when the rule first matches."),
                                   tr("Add a tray icon without changing whether the window is visible or minimized."),
                                   tr("Create a tray icon and hide the window on first match, including existing "
                                      "windows when applying rules.")});
@@ -582,7 +701,8 @@ class RuleDialog : public QDialog {
         m_startupProtection = new QCheckBox(tr("Retry early startup restoration once"));
         m_startupProtection->setObjectName(QStringLiteral("startupProtection"));
         m_startupProtection->setChecked(behavior.value(QStringLiteral("startupProtection")).toBool());
-        m_startupProtection->setEnabled(m_startup->currentData() == QLatin1String("hide"));
+        m_startupProtection->setEnabled((m_startup->currentData() == QLatin1String("hide") ||
+                                         m_startup->currentData() == QLatin1String("inherit")));
         m_startupProtection->setToolTip(
             toolTipText(tr("If an app immediately reopens its window after Start in tray, hide it once "
                            "more within 1.5 seconds unless it becomes active. Show, Unpin and "
@@ -630,6 +750,52 @@ class RuleDialog : public QDialog {
         actions->addRow(QString(),
                         plainLabel(tr("Quit on logout is unavailable: this build has no matching KWin adapter.")));
 #endif
+        m_iconEnabled = new QCheckBox(tr("Override the tray icon"));
+        m_iconEnabled->setObjectName(QStringLiteral("iconOverrideEnabled"));
+        m_iconEnabled->setToolTip(
+            toolTipText(tr("Use your chosen desktop file's icon or image instead of every automatic icon lookup. "
+                           "This changes only the tray icon; it does not change window matching. Off by default. "
+                           "For overlapping rules, the first enabled override in stored rule order wins.")));
+        const auto icon = rule.value(QStringLiteral("iconOverride")).toMap();
+        m_iconEnabled->setChecked(icon.value(QStringLiteral("enabled")).toBool());
+        actions->addRow(QString(), m_iconEnabled);
+        auto iconRow = new QHBoxLayout;
+        m_iconPath = new QLineEdit(icon.value(QStringLiteral("path")).toString());
+        m_iconPath->setObjectName(QStringLiteral("iconOverridePath"));
+        m_iconPath->setReadOnly(true);
+        m_iconPath->setToolTip(toolTipText(
+            tr("Local desktop file or image used for this rule's tray icon. "
+               "Desktop files supply only their Icon entry; their commands are never run. Keep this file available.")));
+        auto chooseIcon = makeButton(tr("Choose…"), QStringLiteral("document-open"));
+        chooseIcon->setObjectName(QStringLiteral("chooseTrayIcon"));
+        chooseIcon->setToolTip(toolTipText(
+            tr("Choose a local .desktop launcher or an image supported by Qt. Available image formats are listed in the file dialog.")));
+        iconRow->addWidget(m_iconPath, 1);
+        iconRow->addWidget(chooseIcon);
+        actions->addRow(tr("Tray icon:"), iconRow);
+        const auto enableIcon = [this, chooseIcon](bool enabled) {
+            m_iconPath->setEnabled(enabled);
+            chooseIcon->setEnabled(enabled);
+        };
+        enableIcon(m_iconEnabled->isChecked());
+        connect(m_iconEnabled, &QCheckBox::toggled, this, enableIcon);
+        connect(m_iconEnabled, &QCheckBox::toggled, this, &RuleDialog::edited);
+        connect(m_iconPath, &QLineEdit::textChanged, this, &RuleDialog::edited);
+        connect(chooseIcon, &QPushButton::clicked, this, [this]() {
+            QStringList patterns;
+            for (const auto &format : QImageReader::supportedImageFormats())
+                patterns.append(QStringLiteral("*.") + QString::fromLatin1(format));
+            const auto path = QFileDialog::getOpenFileName(
+                this, tr("Choose tray icon or desktop file"), m_iconPath->text(),
+                tr("Desktop files (*.desktop);;Images (%1)").arg(patterns.join(QLatin1Char(' '))));
+            if (path.isEmpty())
+                return;
+            if (explicitTrayIcon(path).pixmap(32, 32).isNull()) {
+                setMessage(m_error, tr("This file does not provide a readable icon. Choose another file."));
+                return;
+            }
+            m_iconPath->setText(path);
+        });
         outer->addLayout(actions);
         outer->addWidget(plainLabel(tr("Minimize and close actions do not require a startup action. Start in tray "
                                        "hides on first match, including existing windows when applying rules. "
@@ -727,17 +893,15 @@ class RuleDialog : public QDialog {
                             QLatin1Char('\n') + fieldToolTip(key)));
             auto op = new QComboBox;
             op->setObjectName(key + QStringLiteral("Operator"));
-            op->setToolTip(
-                toolTipText(key == QLatin1String("role") || key == QLatin1String("caption")
-                                ? tr("Equals matches the complete value; Contains matches a literal part of it. Both "
-                                     "are case-sensitive; wildcards and regular expressions are not supported.")
-                                : tr("Match the complete application identifier exactly, including capitalization.")));
-            op->addItem(tr("Equals"), QStringLiteral("equals"));
-            if (key == QLatin1String("role") || key == QLatin1String("caption"))
-                op->addItem(tr("Contains"), QStringLiteral("contains"));
-            comboToolTips(op, {tr("Match the entire value, including capitalization."),
-                               tr("Match a literal part of the value, including capitalization. No wildcards or "
-                                  "regular expressions.")});
+            op->setToolTip(toolTipText(tr(
+                "Exact match compares the complete value. Substring match finds a literal part. "
+                "Regular expression uses a case-sensitive PCRE2 pattern; expensive patterns stop without matching.")));
+            op->addItem(tr("Exact match"), QStringLiteral("equals"));
+            op->addItem(tr("Substring match"), QStringLiteral("contains"));
+            op->addItem(tr("Regular expression"), QStringLiteral("regexp"));
+            comboToolTips(op, {tr("Match the complete value, including capitalization."),
+                               tr("Match a literal part of the value, including capitalization."),
+                               tr("Match a case-sensitive regular expression. Invalid patterns cannot be saved.")});
             auto value = new QLineEdit;
             value->setObjectName(key + QStringLiteral("Value"));
             value->setMaxLength(1024);
@@ -790,9 +954,12 @@ class RuleDialog : public QDialog {
         m_preview = new QTreeWidget;
         m_preview->setObjectName(QStringLiteral("windowPreview"));
         m_preview->setToolTip(toolTipText(
-            tr("Shows which open windows match this rule and why others are excluded. Uses your unsaved edits.")));
+            tr("Shows which open windows match this rule and why others are excluded. Uses your unsaved edits. "
+               "Click a column heading to sort; initially sorted by Window.")));
         m_preview->setHeaderLabels({tr("Window"), tr("Result")});
         m_preview->setRootIsDecorated(false);
+        m_preview->setSortingEnabled(true);
+        m_preview->sortByColumn(0, Qt::AscendingOrder);
         m_preview->setMinimumHeight(100);
         m_preview->header()->setSectionResizeMode(0, QHeaderView::Stretch);
         m_preview->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
@@ -803,11 +970,15 @@ class RuleDialog : public QDialog {
         m_error->setForegroundRole(QPalette::Link);
         auto pendingNotice =
             plainLabel(tr("OK updates the rule list. Apply on the configuration page saves your changes."));
+        addOptionHelp(outer);
         scroll->setWidget(content);
         dialogLayout->addWidget(scroll, 1);
         dialogLayout->addWidget(m_error);
         dialogLayout->addWidget(pendingNotice);
-        auto buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+        auto buttons = new QDialogButtonBox(QDialogButtonBox::Help | QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+        buttons->button(QDialogButtonBox::Help)
+            ->setToolTip(toolTipText(tr("Open help for window rules and their actions.")));
+        connect(buttons, &QDialogButtonBox::helpRequested, this, []() { openHandbook(QStringLiteral("rules")); });
         buttons->button(QDialogButtonBox::Ok)
             ->setToolTip(
                 toolTipText(tr("Update the pending rule list with these edits. Apply or OK on the main page saves the "
@@ -823,7 +994,8 @@ class RuleDialog : public QDialog {
         connect(m_children, &QCheckBox::toggled, this, &RuleDialog::edited);
         connect(m_enabled, &QCheckBox::toggled, this, &RuleDialog::edited);
         connect(m_startup, &QComboBox::currentIndexChanged, this, [this]() {
-            m_startupProtection->setEnabled(m_startup->currentData() == QLatin1String("hide"));
+            m_startupProtection->setEnabled((m_startup->currentData() == QLatin1String("hide") ||
+                                             m_startup->currentData() == QLatin1String("inherit")));
             edited();
         });
         connect(m_startupProtection, &QCheckBox::toggled, this, &RuleDialog::edited);
@@ -838,7 +1010,8 @@ class RuleDialog : public QDialog {
         QTimer::singleShot(0, this, &RuleDialog::refreshPreview);
     }
 
-    void suggestProperties(const QVariantMap &info) {
+    void suggestProperties(const QVariantMap &selectedInfo) {
+        const auto info = matchingProperties(selectedInfo);
         bool suggested = false;
         for (auto it = m_conditions.begin(); it != m_conditions.end(); ++it) {
             // An unchecked field can still contain a user's pending text.
@@ -872,13 +1045,15 @@ class RuleDialog : public QDialog {
         result[QStringLiteral("description")] = m_description->toPlainText();
         result[QStringLiteral("enabled")] = m_enabled->isChecked();
         result[QStringLiteral("behavior")] =
-            QVariantMap{{QStringLiteral("autoPin"), m_startup->currentData() == QLatin1String("pin")},
+            QVariantMap{{QStringLiteral("inheritStartup"), m_startup->currentData() == QLatin1String("inherit")},
+                        {QStringLiteral("autoPin"), m_startup->currentData() == QLatin1String("pin")},
                         {QStringLiteral("startInTray"), m_startup->currentData() == QLatin1String("hide")},
                         {QStringLiteral("minimizeToTray"), m_minimize->currentData()},
                         {QStringLiteral("closeToTray"), m_close->isChecked()},
                         {QStringLiteral("terminateOnLogout"), m_quitOnLogout->isChecked()},
-                        {QStringLiteral("startupProtection"),
-                         m_startup->currentData() == QLatin1String("hide") && m_startupProtection->isChecked()}};
+                        {QStringLiteral("startupProtection"), (m_startup->currentData() == QLatin1String("hide") ||
+                                                               m_startup->currentData() == QLatin1String("inherit")) &&
+                                                                  m_startupProtection->isChecked()}};
         QVariantMap match{{QStringLiteral("windowTypes"), m_type->currentData()},
                           {QStringLiteral("includeChildren"), !m_children->isChecked()}};
         for (auto it = m_conditions.begin(); it != m_conditions.end(); ++it) {
@@ -886,6 +1061,8 @@ class RuleDialog : public QDialog {
                 match[it.key()] = QVariantMap{{QStringLiteral("operator"), it->op->currentData()},
                                               {QStringLiteral("value"), it->value->text()}};
         }
+        result[QStringLiteral("iconOverride")] = QVariantMap{{QStringLiteral("enabled"), m_iconEnabled->isChecked()},
+                                                             {QStringLiteral("path"), m_iconPath->text()}};
         result[QStringLiteral("match")] = match;
         if (!m_initialRule.isEmpty() && result != m_initialRule)
             result[QStringLiteral("autoCreated")] = false;
@@ -911,6 +1088,10 @@ class RuleDialog : public QDialog {
                 return;
             }
         }
+        if (m_iconEnabled->isChecked() && explicitTrayIcon(m_iconPath->text()).pixmap(32, 32).isNull()) {
+            setMessage(m_error, tr("Choose a readable tray icon or turn off the override."));
+            return;
+        }
         QVariantList checked;
         QString error;
         if (!decodeRules(encodeRules({rule()}), checked, error)) {
@@ -932,14 +1113,7 @@ class RuleDialog : public QDialog {
         m_detect->setEnabled(false);
         setMessage(m_error, tr("Select a window with the crosshair. Press Escape to cancel."));
         QTimer::singleShot(m_delay->value() * 1000, this, [this]() {
-            hide();
-            auto message =
-                QDBusMessage::createMethodCall(QStringLiteral("org.kde.KWin"), QStringLiteral("/KWin"),
-                                               QStringLiteral("org.kde.KWin"), QStringLiteral("queryWindowInfo"));
-            auto watcher = new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(message, 120000), this);
-            whenFinished(watcher, this, [this](QDBusPendingCallWatcher *watcher) {
-                const QDBusPendingReply<QVariantMap> reply = *watcher;
-                watcher->deleteLater();
+            new WindowPicker(this, [this](const QDBusPendingReply<QVariantMap> &reply) {
                 show();
                 raise();
                 activateWindow();
@@ -1034,7 +1208,7 @@ class RuleDialog : public QDialog {
     };
   private slots:
     void chooseProperties(const QVariantMap &selectedInfo) {
-        auto info = selectedInfo;
+        auto info = matchingProperties(selectedInfo);
         info[QStringLiteral("desktopFile")] = desktopIdentity(info.value(QStringLiteral("desktopFile")).toString());
         if (info.isEmpty() || protectedWindow(info)) {
             setMessage(m_error, tr("Minimize2Tray and its configuration hosts cannot be targeted."));
@@ -1066,7 +1240,7 @@ class RuleDialog : public QDialog {
             for (int column = 0; column < 3; ++column)
                 item->setToolTip(column, toolTipText(fieldToolTip(key)));
             const bool identity = key == QLatin1String("desktopFile") || key == QLatin1String("resourceClass") ||
-                                  key == QLatin1String("resourceName");
+                                  key == QLatin1String("resourceName") || key == QLatin1String("resourceClassComplete");
             item->setCheckState(0, (!identitySelected && identity) || key == QLatin1String("role") ? Qt::Checked
                                                                                                    : Qt::Unchecked);
             if (identity)
@@ -1118,7 +1292,8 @@ class RuleDialog : public QDialog {
             }
             if (!selected.contains(QStringLiteral("desktopFile")) &&
                 !selected.contains(QStringLiteral("resourceClass")) &&
-                !selected.contains(QStringLiteral("resourceName"))) {
+                !selected.contains(QStringLiteral("resourceName")) &&
+                !selected.contains(QStringLiteral("resourceClassComplete"))) {
                 error->setText(tr("Select an application ID, class or instance."));
                 return;
             }
@@ -1158,6 +1333,8 @@ class RuleDialog : public QDialog {
     QLineEdit *m_title;
     QPlainTextEdit *m_description;
     QCheckBox *m_enabled;
+    QCheckBox *m_iconEnabled;
+    QLineEdit *m_iconPath;
     QComboBox *m_startup;
     QCheckBox *m_startupProtection;
     QComboBox *m_minimize;
@@ -1182,7 +1359,7 @@ class Minimize2TrayConfig : public KCModule {
   public:
     Minimize2TrayConfig(QObject *parent, const KPluginMetaData &data, const QVariantList &args)
         : KCModule(parent, data), m_config(QStringLiteral("kwinrc")) {
-        setButtons(Apply | Default);
+        setButtons(Help | Apply | Default);
         auto outer = new QVBoxLayout(widget());
         outer->setContentsMargins(16, 16, 16, 16);
         outer->setSpacing(12);
@@ -1282,6 +1459,19 @@ class Minimize2TrayConfig : public KCModule {
         m_tabs->addTab(rulesPage, QIcon::fromTheme(QStringLiteral("preferences-system-windows")), tr("Window rules"));
         auto trayPage = new QWidget;
         auto trayLayout = new QVBoxLayout(trayPage);
+        auto startupRow = new QFormLayout;
+        m_globalStartup = new QComboBox;
+        m_globalStartup->setObjectName(QStringLiteral("globalStartupAction"));
+        m_globalStartup->addItem(tr("No startup action"), QStringLiteral("none"));
+        m_globalStartup->addItem(tr("Pin without initially hiding"), QStringLiteral("pin"));
+        m_globalStartup->addItem(tr("Start in tray"), QStringLiteral("hide"));
+        m_globalStartup->setToolTip(
+            toolTipText(tr("Default action when a window first matches a rule using Use global startup. "
+                           "Leave it unchanged, add a tray icon without hiding it, or hide it in the tray. "
+                           "Existing rules retain their explicit startup choices. This does not affect windows without "
+                           "a matching rule.")));
+        startupRow->addRow(tr("Startup:"), m_globalStartup);
+        trayLayout->addLayout(startupRow);
         m_dot = new QCheckBox(tr("Counter as dot"));
         m_dot->setObjectName(QStringLiteral("countUseDot"));
         m_dot->setToolTip(
@@ -1373,6 +1563,7 @@ class Minimize2TrayConfig : public KCModule {
             m_model->put(entry.second, entry.first);
             m_undo->setVisible(!m_deleted.isEmpty());
         });
+        connect(m_globalStartup, &QComboBox::currentIndexChanged, this, &Minimize2TrayConfig::changed);
         connect(m_dot, &QCheckBox::toggled, this, &Minimize2TrayConfig::changed);
         connect(m_hide, &QCheckBox::toggled, this, &Minimize2TrayConfig::changed);
         connect(m_debug, &QCheckBox::toggled, this, &Minimize2TrayConfig::changed);
@@ -1470,6 +1661,7 @@ class Minimize2TrayConfig : public KCModule {
         const auto values = readSettings(m_config);
         m_dot->setChecked(values.value(QStringLiteral("countUseDot")).toBool());
         m_limit->setValue(values.value(QStringLiteral("countDisplayLimit")).toInt());
+        m_globalStartup->setCurrentIndex(m_globalStartup->findData(values.value(QStringLiteral("startupAction"))));
         m_hide->setChecked(values.value(QStringLiteral("hideOnMinimize")).toBool());
         m_debug->setChecked(values.value(QStringLiteral("debugEnabled")).toBool());
         m_loaded = values;
@@ -1508,7 +1700,8 @@ class Minimize2TrayConfig : public KCModule {
             saveError(tr("The configuration is read-only."));
             return;
         }
-        for (const auto *key : {"rules", "countUseDot", "countDisplayLimit", "hideOnMinimize", "debugEnabled"}) {
+        for (const auto *key :
+             {"rules", "countUseDot", "countDisplayLimit", "hideOnMinimize", "startupAction", "debugEnabled"}) {
             if (group.isEntryImmutable(key)) {
                 saveError(tr("A setting is locked by the system administrator."));
                 return;
@@ -1528,6 +1721,7 @@ class Minimize2TrayConfig : public KCModule {
                                   : previousSchema == QJsonValue(4) ? QStringLiteral("rulesSchema4Backup")
                                   : previousSchema == QJsonValue(5) ? QStringLiteral("rulesSchema5Backup")
                                   : previousSchema == QJsonValue(6) ? QStringLiteral("rulesSchema6Backup")
+                                  : previousSchema == QJsonValue(7) ? QStringLiteral("rulesSchema7Backup")
                                                                     : QString();
         if (!backupKey.isEmpty() && !group.hasKey(backupKey)) {
             if (group.isEntryImmutable(backupKey)) {
@@ -1539,6 +1733,7 @@ class Minimize2TrayConfig : public KCModule {
         group.writeEntry("rules", encodeRules(m_model->rules));
         group.writeEntry("countUseDot", m_dot->isChecked());
         group.writeEntry("countDisplayLimit", m_limit->value());
+        group.writeEntry("startupAction", m_globalStartup->currentData().toString());
         group.writeEntry("hideOnMinimize", m_hide->isChecked());
         group.writeEntry("debugEnabled", m_debug->isChecked());
         if (!m_pendingSort.isEmpty())
@@ -1574,6 +1769,7 @@ class Minimize2TrayConfig : public KCModule {
         m_model->reset({});
         m_dot->setChecked(false);
         m_limit->setValue(99);
+        m_globalStartup->setCurrentIndex(m_globalStartup->findData(QStringLiteral("hide")));
         m_hide->setChecked(false);
         m_debug->setChecked(false);
         m_loading = false;
@@ -1619,13 +1815,7 @@ class Minimize2TrayConfig : public KCModule {
         m_restoreAutomaticHost = !m_automaticHost && widget()->window()->isVisible();
         m_automaticLocker = std::make_unique<QEventLoopLocker>();
         widget()->window()->hide();
-        auto message =
-            QDBusMessage::createMethodCall(QStringLiteral("org.kde.KWin"), QStringLiteral("/KWin"),
-                                           QStringLiteral("org.kde.KWin"), QStringLiteral("queryWindowInfo"));
-        auto watcher = new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(message, 120000), this);
-        whenFinished(watcher, this, [this](QDBusPendingCallWatcher *watcher) {
-            const QDBusPendingReply<QVariantMap> reply = *watcher;
-            watcher->deleteLater();
+        new WindowPicker(this, [this](const QDBusPendingReply<QVariantMap> &reply) {
             if (reply.isError()) {
                 if (reply.error().name() == QLatin1String("org.kde.KWin.Error.UserCancel"))
                     finishAutomaticRule();
@@ -1950,6 +2140,8 @@ class Minimize2TrayConfig : public KCModule {
             if (options->isChecked()) {
                 m_dot->setChecked(backup.settings.value(QStringLiteral("countUseDot")).toBool());
                 m_limit->setValue(backup.settings.value(QStringLiteral("countDisplayLimit")).toInt());
+                m_globalStartup->setCurrentIndex(
+                    m_globalStartup->findData(backup.settings.value(QStringLiteral("startupAction"))));
                 m_hide->setChecked(backup.settings.value(QStringLiteral("hideOnMinimize")).toBool());
                 m_debug->setChecked(backup.settings.value(QStringLiteral("debugEnabled")).toBool());
                 // Keep imported sorting pending until Apply, just like other options.
@@ -2109,6 +2301,7 @@ class Minimize2TrayConfig : public KCModule {
         host->setProperty("minimize2traySaveGuard", true);
         for (auto box : host->findChildren<QDialogButtonBox *>(QString(), Qt::FindDirectChildrenOnly)) {
             const QList<QPair<QDialogButtonBox::StandardButton, QString>> help{
+                {QDialogButtonBox::Help, tr("Open the Minimize2Tray handbook.")},
                 {QDialogButtonBox::Apply, tr("Save pending rules and options and apply them to Minimize2Tray.")},
                 {QDialogButtonBox::Ok, tr("Save pending changes and close the configuration window.")},
                 {QDialogButtonBox::Cancel, tr("Close without applying pending rule or option edits.")},
@@ -2163,6 +2356,7 @@ class Minimize2TrayConfig : public KCModule {
         return {{QStringLiteral("countUseDot"), m_dot->isChecked()},
                 {QStringLiteral("countDisplayLimit"), m_limit->value()},
                 {QStringLiteral("hideOnMinimize"), m_hide->isChecked()},
+                {QStringLiteral("startupAction"), m_globalStartup->currentData()},
                 {QStringLiteral("debugEnabled"), m_debug->isChecked()}};
     }
     KConfig m_config;
@@ -2179,6 +2373,7 @@ class Minimize2TrayConfig : public KCModule {
     QPushButton *m_undo;
     QCheckBox *m_dot;
     QSpinBox *m_limit;
+    QComboBox *m_globalStartup;
     QCheckBox *m_hide;
     QCheckBox *m_debug;
     QVariantMap m_loaded;

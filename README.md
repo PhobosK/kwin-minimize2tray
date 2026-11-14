@@ -31,7 +31,7 @@ You can read more about why I chose this approach in [AI_DISCLOSURE.md](AI_DISCL
 
 ## Installation
 
-Install Python 3.12+, CMake 3.19+, a C++20 compiler, ECM, KDE’s `kcmshell6` configuration host, Qt 6.6+ development files (DBus, Gui, Qml, Widgets) and KF6 development files (Config, CoreAddons, Service, StatusNotifierItem, KCMUtils, XmlGui). The RPM spec lists openSUSE dependencies. Optional **Quit on logout** support also needs Linux 6.13+ headers and the KWin 6.8+ SDK with its Wayland development dependencies; the isolated adapter uses the SDK’s compiler requirements. Rebuild after KWin updates. Without that SDK, other features still build normally. Disable the adapter with `-DBUILD_SESSION_TERMINATION=OFF`.
+Install Python 3.12+, CMake 3.19+, a C++20 compiler, ECM, KDE’s `kcmshell6` configuration host, Qt 6.6+ development files (DBus, Gui, Qml, Widgets) KDE DocTools 6 (`meinproc6`), KHelpCenter for the installed handbook, and KF6 development files (Config, CoreAddons, Service, StatusNotifierItem, KCMUtils, XmlGui). The RPM spec lists openSUSE dependencies. Optional **Quit on logout** support also needs Linux 6.13+ headers and the KWin 6.8+ SDK with its Wayland development dependencies; the isolated adapter uses the SDK’s compiler requirements. Rebuild after KWin updates. Without that SDK, other features still build normally. Disable the adapter with `-DBUILD_SESSION_TERMINATION=OFF`.
 
 ```sh
 git clone https://github.com/PhobosK/kwin-minimize2tray.git
@@ -144,7 +144,7 @@ Rules default to title order; **Sort by** also offers creation time and remember
 
 Each rule offers:
 
-- **Startup:** No startup action, Pin without initially hiding, or Start in tray. Start in tray also applies to existing windows when a rule first matches.
+- **Startup:** Use global startup, No startup action, Pin without initially hiding, or Start in tray. The global choice is on **Tray & badges**; existing rules keep their explicit choices. Start in tray also applies to existing windows when a rule first matches.
 - **Minimize to tray:** On, Off, or the global default. For minimize-only handling, choose No startup action and Minimize On.
 - **Close to tray:** Uses the separately assigned **Close or hide window to tray** shortcut. It has no default binding and does not change Alt+F4. Titlebar/client close buttons, application Quit and tray Quit still close normally.
 - **Quit on logout:** Off by default. For matching windows whose closing is disabled in KDE, send SIGTERM once per process during session closing. This can end all its windows without save prompts. Protected processes/dialogs are skipped; cancelling logout cannot undo termination. Requires native Wayland, Linux 6.13+ and an adapter matching the running KWin; XWayland windows are left alone.
@@ -155,6 +155,10 @@ Overlapping rules combine actions: Start in tray wins over pin-only; Minimize On
 **Show** prevents startup re-hiding; later minimize/close actions can hide again. **Unpin** suppresses automatic actions until the window stops matching all rules or is manually pinned again. Removing the last matching rule restores automatic tray-hidden windows; manual pins remain independent. Tray Quit closes only its associated window.
 
 **Enable debug logging** records rule behavior changes and tray actions in KWin’s logs, identified by window IDs.
+
+The standard **Help** button in configuration opens the installed KDE handbook; Help in the rule editor opens its rule chapter. Question-mark buttons beside editor options repeat their tooltips. Match modes are **Exact match**, **Substring match** and **Regular expression** (case-sensitive, with execution limits). **Whole window class** matches instance and class together, as in KWin rules. The open-window preview sorts by either column, initially by Window.
+
+Launcher discovery uses installed desktop IDs, `StartupWMClass` and executable metadata, including for apps launched by systemd. Ambiguous aliases are left unresolved. **Override the tray icon**, off by default, chooses a local `.desktop` file or supported image without changing matching; desktop commands are never run. Keep the chosen file available. If overrides overlap, the first in stored rule order wins. Do not add an unrelated Application ID just to select an icon.
 
 Legacy class-list settings are backed up and migrated automatically when the script or configuration editor first loads; Cancel does not undo this migration. Older rule schemas are upgraded with backups on Apply/OK. Startup retry defaults Off. Invalid rules are reported and retained. **View as text** shows read-only rule JSON and offers **Export configuration…**. Export backs up all rules, options and sorting, including pending edits, to a JSON file. **Import configuration…** lets you choose rules, options or both. Add rules to the current list or replace it; identical copies are skipped when adding. Imported options replace current options and sorting; unselected items stay unchanged. Choose Apply/OK to save, or Cancel to discard. Global shortcut assignments and unrelated KWin settings are not included.
 

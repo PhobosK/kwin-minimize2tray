@@ -85,7 +85,12 @@ bool decodeConfigurationBackup(const QByteArray &json, ConfigurationBackup &back
     }
     const auto settings = root.value(QStringLiteral("settings")).toObject();
     const auto limit = settings.value(QStringLiteral("countDisplayLimit"));
-    if (settings.size() != 4 || !settings.value(QStringLiteral("countUseDot")).isBool() ||
+    if ((!settings.contains(QStringLiteral("startupAction")) && settings.size() != 4) ||
+        (settings.contains(QStringLiteral("startupAction")) &&
+         (settings.size() != 5 ||
+          !QStringList{QStringLiteral("none"), QStringLiteral("pin"), QStringLiteral("hide")}.contains(
+              settings.value(QStringLiteral("startupAction")).toString()))) ||
+        !settings.value(QStringLiteral("countUseDot")).isBool() ||
         !settings.value(QStringLiteral("hideOnMinimize")).isBool() ||
         !settings.value(QStringLiteral("debugEnabled")).isBool() || !limit.isDouble() || limit.toDouble() < 1 ||
         limit.toDouble() > 9999 || std::floor(limit.toDouble()) != limit.toDouble()) {
@@ -98,6 +103,8 @@ bool decodeConfigurationBackup(const QByteArray &json, ConfigurationBackup &back
     if (!decodeRules(QString::fromUtf8(rules), result.rules, error))
         return false;
     result.settings = settings.toVariantMap();
+    if (!result.settings.contains(QStringLiteral("startupAction")))
+        result.settings[QStringLiteral("startupAction")] = QStringLiteral("hide");
     result.sortOrder = root.value(QStringLiteral("sortOrder")).toString();
     backup = result; // Leave the caller's state untouched on any failure.
     return true;

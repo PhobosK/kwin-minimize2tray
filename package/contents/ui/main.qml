@@ -20,6 +20,7 @@ Item {
     property var trackedWindows: new Object()
     property var pendingWindows: new Object()
     property var pendingActivation: null
+    property var detectionHosts: []
     readonly property Component trayIconComponent: TrayIcon {
         countUseDot: root.countUseDot
         countDisplayLimit: root.countDisplayLimit
@@ -41,6 +42,9 @@ Item {
         target: scriptConfig
         // An older native plugin may still be resident until the next session.
         ignoreUnknownSignals: true
+        function onWindowDetectionChanged(active) {
+            Utils.setDetectionHostsHidden(active);
+        }
         function onSessionClosing() {
             if (typeof scriptConfig.terminateSessionWindows === "function")
                 scriptConfig.terminateSessionWindows(Workspace.windows);
@@ -55,7 +59,10 @@ Item {
         countUseDot = config.countUseDot;
         countDisplayLimit = config.countDisplayLimit;
         hideOnMinimize = config.hideOnMinimize;
-        Workspace.windows.forEach(window => Utils.scheduleWindow(window));
+        Workspace.windows.forEach(window => {
+            Utils.updateWindowIcon(window);
+            Utils.scheduleWindow(window);
+        });
     }
 
     Timer {

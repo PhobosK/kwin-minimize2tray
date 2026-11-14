@@ -1,4 +1,5 @@
 {
+    "X-DocPath": "kwin-minimize2tray/index.html",
     "KPlugin": {
         "Name": "Minimize to Tray",
         "Description": "Configure window rules and tray icons",

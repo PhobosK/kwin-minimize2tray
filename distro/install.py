@@ -22,6 +22,9 @@ def staged_files(stage, prefix, data):
     # Accept the module's conventional lib, lib64 and multiarch Qt6 layouts only.
     qml_pattern = re.compile(r"lib(?:64)?/(?:[^/]+/){0,2}qml/com/github/luisbocanegra/trayicon/.+")
     kcm_pattern = re.compile(r"lib(?:64)?/(?:[^/]+/){0,2}plugins/kwin/effects/configs/kcm_minimize2tray\.so")
+    # Only the two generated handbook files are allowed, not arbitrary documentation paths.
+    handbook = prefix / "share/doc/HTML/en/kwin-minimize2tray"
+    help_files = {handbook / "index.docbook", handbook / "index.cache.bz2"}
     files = []
     for path in sorted(stage.rglob("*")):
         source.require(not path.is_symlink(), f"Staged symlinks are not supported: {path}")
@@ -31,7 +34,7 @@ def staged_files(stage, prefix, data):
         destination = Path("/") / path.relative_to(stage)
         source.require(destination.is_relative_to(prefix), f"Staged path escapes the prefix: {destination}")
         relative = destination.relative_to(prefix).as_posix()
-        source.require(destination.is_relative_to(script) or qml_pattern.fullmatch(relative) or
+        source.require(destination.is_relative_to(script) or destination in help_files or qml_pattern.fullmatch(relative) or
                        data["capabilities"]["kcm"] and kcm_pattern.fullmatch(relative),
                        f"Unexpected staged file: {destination}")
         files.append((path, destination))

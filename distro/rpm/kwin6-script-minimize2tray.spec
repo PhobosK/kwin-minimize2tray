@@ -21,6 +21,7 @@ Source0:        %{url}/archive/refs/tags/v%{version}.tar.gz#/%{name}-PhobosK-v%{
 %endif
 
 BuildRequires:  cmake >= 3.19
+BuildRequires:  kf6-kdoctools
 BuildRequires:  gcc-c++
 BuildRequires:  linux-glibc-devel >= 6.13
 BuildRequires:  cmake(KWin) >= 6.8
@@ -35,6 +36,7 @@ BuildRequires:  cmake(KF6KCMUtils) >= 6.0.0
 BuildRequires:  cmake(KF6XmlGui) >= 6.0.0
 BuildRequires:  cmake(KF6Service) >= 6.0.0
 BuildRequires:  cmake(KF6StatusNotifierItem) >= 6.0.0
+Requires:       khelpcenter
 Requires:       kf6-kcmutils >= 6.0.0
 Requires:       kwin6 >= 6.0.0
 Requires:       plasma6-workspace >= 6.0.0
@@ -60,6 +62,7 @@ module. This package builds the PhobosK fork for KDE Plasma 6.
 %files
 %license LICENSE
 %doc README.md CONTRIBUTING.md
+%{_datadir}/doc/HTML/en/kwin-minimize2tray/
 %{_datadir}/kwin/scripts/com.github.luisbocanegra.minimize2tray/
 %{_libdir}/qt6/qml/com/github/luisbocanegra/trayicon/
 %{_libdir}/qt6/plugins/kwin/effects/configs/kcm_minimize2tray.so

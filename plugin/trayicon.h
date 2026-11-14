@@ -20,6 +20,8 @@ class TrayIcon : public QObject {
     Q_PROPERTY(QUuid windowId READ windowId WRITE setWindowId NOTIFY windowIdChanged);
     Q_PROPERTY(QString toolTipText READ toolTipText WRITE setToolTipText NOTIFY toolTipTextChanged)
     Q_PROPERTY(QString launcherUrl READ launcherUrl WRITE setLauncherUrl NOTIFY launcherUrlChanged)
+    Q_PROPERTY(QVariantMap windowProperties READ windowProperties WRITE setWindowProperties)
+    Q_PROPERTY(QString iconOverride READ iconOverride WRITE setIconOverride)
     Q_PROPERTY(QString xdgName READ xdgName WRITE setXdgName NOTIFY xdgNameChanged)
     Q_PROPERTY(bool demandsAttention READ demandsAttention WRITE setDemandsAttention NOTIFY demandsAttentionChanged)
     Q_PROPERTY(bool countUseDot READ countUseDot WRITE setCountUseDot NOTIFY countUseDotChanged)
@@ -86,6 +88,12 @@ class TrayIcon : public QObject {
     QString m_toolTipText;
     QString toolTipText() const { return m_toolTipText; }
     void setToolTipText(const QString &toolTipText);
+    QVariantMap m_windowProperties;
+    QVariantMap windowProperties() const { return m_windowProperties; }
+    void setWindowProperties(const QVariantMap &properties);
+    QString m_iconOverride;
+    QString iconOverride() const { return m_iconOverride; }
+    void setIconOverride(const QString &path);
     QString m_xdgName;
     QString xdgName() const { return m_xdgName; }
     void setXdgName(const QString &id);

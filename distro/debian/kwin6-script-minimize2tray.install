@@ -1,3 +1,4 @@
 usr/share/kwin/scripts/com.github.luisbocanegra.minimize2tray/
 usr/lib/*/qt6/qml/com/github/luisbocanegra/trayicon/
 usr/lib/*/qt6/plugins/kwin/effects/configs/kcm_minimize2tray.so
+usr/share/doc/HTML/en/kwin-minimize2tray/

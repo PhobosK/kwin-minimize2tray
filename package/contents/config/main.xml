@@ -26,6 +26,10 @@
       <min>1</min>
       <max>9999</max>
     </entry>
+    <entry name="startupAction" type="String">
+      <label>Default startup action for rules using the global setting</label>
+      <default>hide</default>
+    </entry>
     <entry name="hideOnMinimize" type="Bool">
       <default>false</default>
     </entry>
