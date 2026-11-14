@@ -1,3 +1,9 @@
+kwin6-script-minimize2tray (2.4.1-1) unstable; urgency=medium
+
+  * Prepare a patch release for fresh tag-based package builds.
+
+ -- PhobosK <PhobosK@users.noreply.github.com>  Sat, 14 Nov 2026 10:53:06 +0200
+
 kwin6-script-minimize2tray (2.4.0-1) unstable; urgency=medium
 
   * Improve launcher icons, window rules and KDE help.

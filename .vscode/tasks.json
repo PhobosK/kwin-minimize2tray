@@ -193,7 +193,7 @@
     {
       "id": "releaseTag",
       "type": "promptString",
-      "description": "Existing tag, including v (for example v2.4.0)",
+      "description": "Existing tag, including v (for example v2.4.1)",
       "default": ""
     }
   ]

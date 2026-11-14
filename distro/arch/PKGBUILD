@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 # Run distro/prepare.py arch OUTPUT first to fill the verified source checksum.
 pkgname=kwin6-script-minimize2tray
-pkgver=2.4.0
+pkgver=2.4.1
 pkgrel=1
 pkgdesc='Minimize application windows to the tray in KDE Plasma 6 (PhobosK fork)'
 arch=('x86_64')
