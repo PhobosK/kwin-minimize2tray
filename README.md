@@ -156,7 +156,7 @@ Overlapping rules combine actions: Start in tray wins over pin-only; Minimize On
 
 **Enable debug logging** records rule behavior changes and tray actions in KWin’s logs, identified by window IDs.
 
-The standard **Help** button in configuration opens the installed KDE handbook; Help in the rule editor opens its rule chapter. Question-mark buttons beside editor options repeat their tooltips. Match modes are **Exact match**, **Substring match** and **Regular expression** (case-sensitive, with execution limits). **Whole window class** matches instance and class together, as in KWin rules. The open-window preview sorts by either column, initially by Window.
+The standard **Help** button in configuration opens the installed KDE handbook; Help in the rule editor opens its rule chapter. Small information icons beside selected labels and Match choices repeat their tooltips on hover. Match choices ignore mouse-wheel scrolling. Match modes are **Exact match**, **Substring match** and **Regular expression** (case-sensitive, with execution limits). **Whole window class** matches instance and class together, as in KWin rules. The open-window preview sorts by either column, initially by Window.
 
 Launcher discovery uses installed desktop IDs, `StartupWMClass` and executable metadata, including for apps launched by systemd. Ambiguous aliases are left unresolved. **Override the tray icon**, off by default, chooses a local `.desktop` file or supported image without changing matching; desktop commands are never run. Keep the chosen file available. If overrides overlap, the first in stored rule order wins. Do not add an unrelated Application ID just to select an icon.
 

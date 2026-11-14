@@ -3,7 +3,6 @@
 #include "rules.h"
 #include <QDesktopServices>
 #include <QImageReader>
-#include <QToolButton>
 #include <QUrl>
 
 #include <KCModule>
@@ -64,6 +63,7 @@
 #include <QTreeWidget>
 #include <QUuid>
 #include <QVBoxLayout>
+#include <QWheelEvent>
 #include <algorithm>
 #include <functional>
 #include <memory>
@@ -589,50 +589,53 @@ void openHandbook(const QString &page) {
     QDesktopServices::openUrl(QUrl(QStringLiteral("help:/kwin-minimize2tray/") + page + QStringLiteral(".html")));
 }
 
-void addOptionHelp(QLayout *layout) {
-    for (int i = 0; i < layout->count(); ++i) {
-        auto item = layout->itemAt(i);
-        if (item->layout()) {
-            addOptionHelp(item->layout());
-            continue;
-        }
-        auto control = item->widget();
-        if (!control || control->toolTip().isEmpty() ||
-            !(qobject_cast<QCheckBox *>(control) || qobject_cast<QComboBox *>(control) ||
-              qobject_cast<QLineEdit *>(control) || qobject_cast<QPlainTextEdit *>(control) ||
-              qobject_cast<QSpinBox *>(control)))
-            continue;
-        auto wrapper = new QWidget(control->parentWidget());
-        auto row = new QHBoxLayout(wrapper);
-        row->setContentsMargins(0, 0, 0, 0);
-        auto marker = new QToolButton(wrapper);
-        marker->setObjectName(control->objectName() + QStringLiteral("Help"));
-        marker->setIcon(control->style()->standardIcon(QStyle::SP_TitleBarContextHelpButton));
-        marker->setAutoRaise(true);
-        marker->setFocusPolicy(Qt::StrongFocus);
-        marker->setAccessibleName(QObject::tr("Explain this option"));
-        marker->setToolTip(control->toolTip());
-        QObject::connect(marker, &QToolButton::clicked, control, [control, marker]() {
-            QToolTip::showText(marker->mapToGlobal(QPoint(0, marker->height())), control->toolTip(), marker);
-        });
-        // Keep hover help in sync when detected suggestions change an option's tooltip.
-        class HelpTip final : public QObject {
-          public:
-            HelpTip(QWidget *source, QWidget *target) : QObject(target), source(source), target(target) {}
-            bool eventFilter(QObject *, QEvent *event) override {
-                if (event->type() == QEvent::ToolTipChange)
-                    target->setToolTip(source->toolTip());
-                return false;
-            }
-            QWidget *source;
-            QWidget *target;
-        };
-        control->installEventFilter(new HelpTip(control, marker));
-        delete layout->replaceWidget(control, wrapper, Qt::FindDirectChildrenOnly);
-        row->addWidget(control, 1);
-        row->addWidget(marker, 0, Qt::AlignTop);
+class InfoIcon final : public QWidget {
+  public:
+    InfoIcon(QWidget *source, QWidget *parent) : QWidget(parent), m_source(source) {
+        setObjectName(source->objectName() + QStringLiteral("Info"));
+        setFixedSize(16, 16);
+        setCursor(Qt::WhatsThisCursor);
+        setToolTip(source->toolTip());
+        setAccessibleName(QObject::tr("Information"));
+        source->installEventFilter(this);
     }
+
+  protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter painter(this);
+        QIcon::fromTheme(QStringLiteral("help-about"), style()->standardIcon(QStyle::SP_MessageBoxInformation))
+            .paint(&painter, rect());
+    }
+    bool eventFilter(QObject *, QEvent *event) override {
+        // Suggestions can change a property's tooltip while the editor is open.
+        if (event->type() == QEvent::ToolTipChange)
+            setToolTip(m_source->toolTip());
+        return false;
+    }
+
+  private:
+    QWidget *m_source;
+};
+
+QWidget *withInfo(QWidget *control, QWidget *source = nullptr, bool expanding = false) {
+    auto wrapper = new QWidget(control->parentWidget());
+    auto row = new QHBoxLayout(wrapper);
+    row->setContentsMargins(0, 0, 0, 0);
+    row->setSpacing(4);
+    row->addWidget(control, expanding ? 1 : 0);
+    row->addWidget(new InfoIcon(source ? source : control, wrapper), 0, Qt::AlignVCenter);
+    if (!expanding) {
+        wrapper->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Preferred);
+        row->addStretch(); // Keep the icon beside the text, not at the far end of the row.
+    }
+    return wrapper;
 }
+
+class MatchComboBox final : public QComboBox {
+  protected:
+    // Scroll the editor without silently changing a matching condition.
+    void wheelEvent(QWheelEvent *event) override { event->ignore(); }
+};
 
 class RuleDialog : public QDialog {
     Q_OBJECT
@@ -697,7 +700,7 @@ class RuleDialog : public QDialog {
                                   tr("Add a tray icon without changing whether the window is visible or minimized."),
                                   tr("Create a tray icon and hide the window on first match, including existing "
                                      "windows when applying rules.")});
-        actions->addRow(tr("Startup:"), m_startup);
+        actions->addRow(withInfo(plainLabel(tr("Startup:")), m_startup), m_startup);
         m_startupProtection = new QCheckBox(tr("Retry early startup restoration once"));
         m_startupProtection->setObjectName(QStringLiteral("startupProtection"));
         m_startupProtection->setChecked(behavior.value(QStringLiteral("startupProtection")).toBool());
@@ -708,7 +711,7 @@ class RuleDialog : public QDialog {
                            "more within 1.5 seconds unless it becomes active. Show, Unpin and "
                            "activation cancel the retry. A user restore without activation can also "
                            "be retried; leave this off if it interferes.")));
-        actions->addRow(QString(), m_startupProtection);
+        actions->addRow(QString(), withInfo(m_startupProtection));
         m_minimize = new QComboBox;
         m_minimize->setObjectName(QStringLiteral("minimizeToTray"));
         m_minimize->setToolTip(
@@ -722,14 +725,14 @@ class RuleDialog : public QDialog {
                       {tr("Follow Hide on minimize on the Tray & badges page."),
                        tr("Hide the window in the tray when it is minimized."),
                        tr("Allow ordinary minimization without tray hiding, even if the window has a tray icon.")});
-        actions->addRow(tr("Minimize to tray:"), m_minimize);
+        actions->addRow(withInfo(plainLabel(tr("Minimize to tray:")), m_minimize), m_minimize);
         m_close = new QCheckBox(tr("Close to tray through the optional shortcut"));
         m_close->setObjectName(QStringLiteral("closeToTray"));
         m_close->setToolTip(
             toolTipText(tr("Hide the matching window when you use the separately assigned ‘Close or hide window to "
                            "tray’ shortcut. This does not intercept titlebar Close, Alt+F4 or application Quit.")));
         m_close->setChecked(behavior.value(QStringLiteral("closeToTray")).toBool());
-        actions->addRow(QString(), m_close);
+        actions->addRow(QString(), withInfo(m_close));
         m_quitOnLogout = new QCheckBox(tr("Quit on logout"));
         m_quitOnLogout->setObjectName(QStringLiteral("terminateOnLogout"));
         m_quitOnLogout->setChecked(behavior.value(QStringLiteral("terminateOnLogout")).toBool());
@@ -739,7 +742,7 @@ class RuleDialog : public QDialog {
                            "save prompts. Requires a verified native Wayland process, Linux 6.13+ and "
                            "an adapter built for the running KWin. XWayland and protected processes are "
                            "left alone. Cancelling logout cannot restore a terminated application.")));
-        actions->addRow(QString(), m_quitOnLogout);
+        actions->addRow(QString(), withInfo(m_quitOnLogout));
 #if !MINIMIZE2TRAY_HAS_SESSION_PROCESS
         // Preserve imported settings, but still allow disabling an existing opt-in.
         m_quitOnLogout->setEnabled(m_quitOnLogout->isChecked());
@@ -758,7 +761,7 @@ class RuleDialog : public QDialog {
                            "For overlapping rules, the first enabled override in stored rule order wins.")));
         const auto icon = rule.value(QStringLiteral("iconOverride")).toMap();
         m_iconEnabled->setChecked(icon.value(QStringLiteral("enabled")).toBool());
-        actions->addRow(QString(), m_iconEnabled);
+        actions->addRow(QString(), withInfo(m_iconEnabled));
         auto iconRow = new QHBoxLayout;
         m_iconPath = new QLineEdit(icon.value(QStringLiteral("path")).toString());
         m_iconPath->setObjectName(QStringLiteral("iconOverridePath"));
@@ -772,7 +775,7 @@ class RuleDialog : public QDialog {
             tr("Choose a local .desktop launcher or an image supported by Qt. Available image formats are listed in the file dialog.")));
         iconRow->addWidget(m_iconPath, 1);
         iconRow->addWidget(chooseIcon);
-        actions->addRow(tr("Tray icon:"), iconRow);
+        actions->addRow(withInfo(plainLabel(tr("Tray icon:")), m_iconPath), iconRow);
         const auto enableIcon = [this, chooseIcon](bool enabled) {
             m_iconPath->setEnabled(enabled);
             chooseIcon->setEnabled(enabled);
@@ -825,7 +828,7 @@ class RuleDialog : public QDialog {
         });
         m_delay->setAccessibleName(tr("Window detection delay"));
         detectRow->addWidget(m_detect);
-        detectRow->addWidget(plainLabel(tr("Delay:")));
+        detectRow->addWidget(withInfo(plainLabel(tr("Delay:")), m_delay));
         detectRow->addWidget(m_delay);
         detectRow->addStretch();
         outer->addLayout(detectRow);
@@ -837,7 +840,6 @@ class RuleDialog : public QDialog {
         outer->addWidget(m_suggestionNotice);
         outer->addWidget(plainLabel(tr("Select the main window of the app you want to pin.")));
         auto scope = new QHBoxLayout;
-        scope->addWidget(plainLabel(tr("Window type:")));
         m_type = new QComboBox;
         m_type->setObjectName(QStringLiteral("windowType"));
         m_type->setToolTip(
@@ -871,9 +873,10 @@ class RuleDialog : public QDialog {
                                 Qt::ToolTipRole);
         }
         m_type->setCurrentIndex(typeIndex);
+        scope->addWidget(withInfo(plainLabel(tr("Window type:")), m_type));
         scope->addWidget(m_type);
         scope->addStretch();
-        scope->addWidget(m_children);
+        scope->addWidget(withInfo(m_children));
         outer->addLayout(scope);
         auto table = new QGridLayout;
         table->setColumnStretch(3, 1);
@@ -891,7 +894,8 @@ class RuleDialog : public QDialog {
             use->setToolTip(
                 toolTipText(tr("Require this property to match. All checked properties must match together.") +
                             QLatin1Char('\n') + fieldToolTip(key)));
-            auto op = new QComboBox;
+            auto op = new MatchComboBox;
+            op->setFocusPolicy(Qt::StrongFocus);
             op->setObjectName(key + QStringLiteral("Operator"));
             op->setToolTip(toolTipText(tr(
                 "Exact match compares the complete value. Substring match finds a literal part. "
@@ -914,8 +918,10 @@ class RuleDialog : public QDialog {
             table->addWidget(use, row, 0);
             auto label = plainLabel(fieldLabel(key));
             label->setToolTip(toolTipText(fieldToolTip(key)));
-            table->addWidget(label, row, 1);
-            table->addWidget(op, row, 2);
+            label->setObjectName(key + QStringLiteral("Label"));
+            label->setWordWrap(false);
+            table->addWidget(withInfo(label), row, 1);
+            table->addWidget(withInfo(op, nullptr, true), row, 2);
             table->addWidget(value, row++, 3);
             auto updateEnabled = [use, op, value]() {
                 op->setEnabled(use->isChecked());
@@ -970,7 +976,6 @@ class RuleDialog : public QDialog {
         m_error->setForegroundRole(QPalette::Link);
         auto pendingNotice =
             plainLabel(tr("OK updates the rule list. Apply on the configuration page saves your changes."));
-        addOptionHelp(outer);
         scroll->setWidget(content);
         dialogLayout->addWidget(scroll, 1);
         dialogLayout->addWidget(m_error);
@@ -1472,6 +1477,15 @@ class Minimize2TrayConfig : public KCModule {
                            "a matching rule.")));
         startupRow->addRow(tr("Startup:"), m_globalStartup);
         trayLayout->addLayout(startupRow);
+        m_hide = new QCheckBox(tr("Hide on minimize"));
+        m_hide->setObjectName(QStringLiteral("hideOnMinimize"));
+        m_hide->setToolTip(
+            toolTipText(tr("Default minimize behaviour for rules using the global setting and manually pinned "
+                           "windows without a matching rule. A rule’s On or Off setting overrides this default.")));
+        trayLayout->addWidget(m_hide);
+        trayLayout->addWidget(
+            plainLabel(tr("Default for rules using ‘Use global setting’ and for manually pinned windows "
+                          "without a matching rule. Per-rule On or Off overrides this default.")));
         m_dot = new QCheckBox(tr("Counter as dot"));
         m_dot->setObjectName(QStringLiteral("countUseDot"));
         m_dot->setToolTip(
@@ -1488,15 +1502,6 @@ class Minimize2TrayConfig : public KCModule {
         limitRow->addRow(tr("Counter display limit:"), m_limit);
         trayLayout->addLayout(limitRow);
         trayLayout->addWidget(plainLabel(tr("Larger counts are shown with a plus sign, for example 99+.")));
-        m_hide = new QCheckBox(tr("Hide on minimize"));
-        m_hide->setObjectName(QStringLiteral("hideOnMinimize"));
-        m_hide->setToolTip(
-            toolTipText(tr("Default minimize behaviour for rules using the global setting and manually pinned "
-                           "windows without a matching rule. A rule’s On or Off setting overrides this default.")));
-        trayLayout->addWidget(m_hide);
-        trayLayout->addWidget(
-            plainLabel(tr("Default for rules using ‘Use global setting’ and for manually pinned windows "
-                          "without a matching rule. Per-rule On or Off overrides this default.")));
         trayLayout->addStretch();
         m_tabs->addTab(trayPage, QIcon::fromTheme(QStringLiteral("preferences-desktop-notification")),
                        tr("Tray && badges"));
