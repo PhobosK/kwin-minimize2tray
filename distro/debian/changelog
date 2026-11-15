@@ -1,3 +1,11 @@
+kwin6-script-minimize2tray (3.0.0-1) unstable; urgency=medium
+
+  * Improve tray reliability, rule editing, startup performance and diagnostics.
+  * Add native tray conflict handling and Bulgarian interface and help.
+  * Allow GitHub release-asset redirects for online package preparation.
+
+ -- PhobosK <PhobosK@users.noreply.github.com>  Sun, 15 Nov 2026 12:14:05 +0200
+
 kwin6-script-minimize2tray (2.4.2-1) unstable; urgency=medium
 
   * Simplify inline rule help and prevent accidental Match changes.

@@ -1,12 +1,14 @@
 set(PLUGIN_NAME "trayiconplugin")
 set(LIB_NAME "trayicon")
 
-add_library(${PLUGIN_NAME} SHARED ${PLUGIN_NAME}.cpp ${LIB_NAME}.cpp scriptconfig.cpp rules.cpp applicationidentity.cpp sessiontermination.cpp)
-find_package(Qt6 ${QT_MIN_VERSION} REQUIRED COMPONENTS DBus Gui Qml Widgets)
-find_package(KF6 ${KF6_MIN_VERSION} REQUIRED COMPONENTS Config CoreAddons KCMUtils StatusNotifierItem Service XmlGui)
+add_library(${PLUGIN_NAME} SHARED ${PLUGIN_NAME}.cpp ${LIB_NAME}.cpp scriptconfig.cpp rules.cpp nativetray.cpp applicationidentity.cpp translation.cpp sessiontermination.cpp)
+find_package(Qt6 ${QT_MIN_VERSION} REQUIRED COMPONENTS DBus Gui Qml Widgets Concurrent LinguistTools)
+find_package(KF6 ${KF6_MIN_VERSION} REQUIRED COMPONENTS Config CoreAddons KCMUtils StatusNotifierItem Service XmlGui ColorScheme I18n)
 
 target_link_libraries(${PLUGIN_NAME} PRIVATE
     Qt6::Qml
+    Qt6::Concurrent
+    KF6::I18n
     Qt6::DBus
     Qt6::Gui
     Qt6::Widgets
@@ -22,10 +24,10 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE
 install(TARGETS ${PLUGIN_NAME} DESTINATION ${KDE_INSTALL_QMLDIR}/com/github/luisbocanegra/${LIB_NAME})
 install(FILES qmldir DESTINATION ${KDE_INSTALL_QMLDIR}/com/github/luisbocanegra/${LIB_NAME})
 
-add_library(kcm_minimize2tray MODULE configmodule.cpp rules.cpp configbackup.cpp applicationidentity.cpp)
+add_library(kcm_minimize2tray MODULE configmodule.cpp rules.cpp configbackup.cpp nativetray.cpp applicationidentity.cpp translation.cpp)
 set_target_properties(kcm_minimize2tray PROPERTIES PREFIX "")
 target_link_libraries(kcm_minimize2tray PRIVATE
-    Qt6::Widgets Qt6::DBus KF6::KCMUtils KF6::ConfigCore KF6::CoreAddons KF6::Service
+    Qt6::Widgets Qt6::DBus Qt6::Concurrent KF6::I18n KF6::ColorScheme KF6::KCMUtils KF6::ConfigCore KF6::CoreAddons KF6::Service
 )
 install(TARGETS kcm_minimize2tray DESTINATION ${KDE_INSTALL_PLUGINDIR}/kwin/effects/configs)
 
@@ -59,3 +61,21 @@ endif()
 
 target_compile_definitions(${PLUGIN_NAME} PRIVATE MINIMIZE2TRAY_HAS_SESSION_PROCESS=$<TARGET_EXISTS:sessionprocess>)
 target_compile_definitions(kcm_minimize2tray PRIVATE MINIMIZE2TRAY_HAS_SESSION_PROCESS=$<TARGET_EXISTS:sessionprocess>)
+
+# Optional, short-lived X11 worker for stale XEmbed containers inside Wayland sessions.
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(TRAY_RECOVERY QUIET IMPORTED_TARGET xcb xcb-shape xcb-res)
+    if(TRAY_RECOVERY_FOUND)
+        add_executable(minimize2tray-tray-recovery trayrecovery.cpp)
+        target_link_libraries(minimize2tray-tray-recovery PRIVATE PkgConfig::TRAY_RECOVERY)
+        install(TARGETS minimize2tray-tray-recovery DESTINATION ${KDE_INSTALL_QMLDIR}/com/github/luisbocanegra/${LIB_NAME})
+    endif()
+endif()
+
+foreach(target trayiconplugin kcm_minimize2tray)
+    target_compile_definitions(${target} PRIVATE MINIMIZE2TRAY_HAS_TRAY_RECOVERY=$<TARGET_EXISTS:minimize2tray-tray-recovery>)
+endforeach()
+
+qt_add_lrelease(trayiconplugin TS_FILES "${CMAKE_SOURCE_DIR}/translations/minimize2tray_bg.ts" QM_FILES_OUTPUT_VARIABLE TRANSLATION_FILES)
+install(FILES ${TRANSLATION_FILES} DESTINATION ${KDE_INSTALL_DATADIR}/kwin-minimize2tray/translations)

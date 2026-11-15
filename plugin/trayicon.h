@@ -101,7 +101,7 @@ class TrayIcon : public QObject {
     QString m_appName;
     QString appName() const { return m_appName; }
     void updateApplication();
-    void scheduleApplicationUpdate();
+    Q_SLOT void scheduleApplicationUpdate();
     void updateBadges();
     void scheduleBadgeUpdate();
     void updateStatus();

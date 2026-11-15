@@ -10,6 +10,8 @@
       <label>Versioned window matching rules</label>
       <default></default>
     </entry>
+    <entry name="startupDiagnostics" type="Bool"><default>false</default></entry>
+    <entry name="recoverTrayInput" type="Bool"><default>false</default></entry>
     <entry name="debugEnabled" type="Bool">
       <default>false</default>
     </entry>

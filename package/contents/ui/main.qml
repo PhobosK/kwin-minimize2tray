@@ -11,6 +11,7 @@ Item {
     property bool hideOnMinimize: false
     property bool shuttingDown: false
     property var workspaceConnections: []
+    property int trayIconCount: 0
     property var trayIcons: new Object()
     property var automaticMatches: new Object()
     property var automaticPins: new Object()
@@ -79,7 +80,7 @@ Item {
 
     ShortcutHandler {
         name: "Minimize to tray"
-        text: "Minimize window to tray (sets skip Taskbar, Switcher & Pager)"
+        text: qsTranslate("Minimize2Tray", "Minimize window to tray (sets skip Taskbar, Switcher & Pager)")
         sequence: "Meta+Alt+PgDown"
         onActivated: {
             const window = Utils.shortcutWindow(Workspace.activeWindow);
@@ -91,7 +92,7 @@ Item {
 
     ShortcutHandler {
         name: "Close or hide window to tray"
-        text: "Close or hide window to tray (according to window rules)"
+        text: qsTranslate("Minimize2Tray", "Close or hide window to tray (according to window rules)")
         sequence: ""
         onActivated: Utils.closeOrHideWindow(Workspace.activeWindow)
     }
@@ -99,7 +100,7 @@ Item {
     ShortcutHandler {
         // Keep the action ID stable for existing shortcut assignments.
         name: "Add automatic tray rule"
-        text: "Add tray rule…"
+        text: qsTranslate("Minimize2Tray", "Add tray rule…")
         sequence: ""
         onActivated: scriptConfig.addAutomaticRule()
     }

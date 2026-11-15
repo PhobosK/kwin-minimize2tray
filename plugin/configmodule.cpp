@@ -1,11 +1,14 @@
 #include "applicationidentity.h"
 #include "configbackup.h"
 #include "rules.h"
+#include "translation.h"
+#include "nativetray.h"
 #include <QDesktopServices>
 #include <QImageReader>
 #include <QUrl>
 
 #include <KCModule>
+#include <KColorScheme>
 #include <KConfigGroup>
 #include <KPluginFactory>
 #include <KService>
@@ -219,6 +222,7 @@ const QStringList fields{QStringLiteral("desktopFile"),  QStringLiteral("resourc
                          QStringLiteral("caption")};
 
 class RuleModel : public QAbstractListModel {
+    Q_OBJECT
   public:
     enum { RuleRole = Qt::UserRole + 1, SearchRole };
     QVariantList rules;
@@ -334,6 +338,7 @@ class RuleDelegate : public QStyledItemDelegate {
     Q_OBJECT
   public:
     explicit RuleDelegate(QObject *parent) : QStyledItemDelegate(parent) {
+        connect(applicationIndexNotifier(), SIGNAL(changed()), this, SLOT(refreshIcons()));
         connect(KSycoca::self(), &KSycoca::databaseChanged, this, [this]() {
             m_icons.clear();
             if (auto view = qobject_cast<QAbstractItemView *>(this->parent()))
@@ -503,6 +508,11 @@ class RuleDelegate : public QStyledItemDelegate {
         return icon;
     }
     mutable QHash<QByteArray, QIcon> m_icons;
+  private slots:
+    void refreshIcons() {
+        m_icons.clear();
+        if (auto view = qobject_cast<QAbstractItemView *>(parent())) view->viewport()->update();
+    }
   signals:
     void editRequested(const QString &id);
     void deleteRequested(const QString &id);
@@ -528,7 +538,7 @@ class WindowPicker : public QObject {
             if (!reply.isError() && !reply.value()) {
                 restore();
                 const QDBusPendingReply<QVariantMap> failure(QDBusMessage::createError(
-                    QDBusError::Failed, tr("Another window selection is already running. Finish it first.")));
+                    QDBusError::Failed, QObject::tr("Another window selection is already running. Finish it first.")));
                 this->finished(failure);
                 deleteLater();
                 return;
@@ -733,6 +743,13 @@ class RuleDialog : public QDialog {
                            "tray’ shortcut. This does not intercept titlebar Close, Alt+F4 or application Quit.")));
         m_close->setChecked(behavior.value(QStringLiteral("closeToTray")).toBool());
         actions->addRow(QString(), withInfo(m_close));
+        m_skipNative = new QCheckBox(tr("Skip when a native tray is active"));
+        m_skipNative->setObjectName(QStringLiteral("skipNativeTray"));
+        m_skipNative->setChecked(behavior.value(QStringLiteral("skipNativeTray")).toBool());
+        m_skipNative->setToolTip(toolTipText(tr("Off by default. Skip this rule's automatic startup, minimize and close-to-tray actions only while a matching active native tray registration is detected. "
+            "A native tray appearing later releases automatic pins owned by this rule. Other matching rules still apply. "
+            "Unidentified tray items are never guessed, and manual pinning remains available.")));
+        actions->addRow(QString(), withInfo(m_skipNative));
         m_quitOnLogout = new QCheckBox(tr("Quit on logout"));
         m_quitOnLogout->setObjectName(QStringLiteral("terminateOnLogout"));
         m_quitOnLogout->setChecked(behavior.value(QStringLiteral("terminateOnLogout")).toBool());
@@ -880,13 +897,21 @@ class RuleDialog : public QDialog {
         outer->addLayout(scope);
         auto table = new QGridLayout;
         table->setColumnStretch(3, 1);
-        table->addWidget(plainLabel(tr("Use")), 0, 0);
+        auto useHeading = plainLabel(tr("Use"));
+        useHeading->setObjectName(QStringLiteral("useHeading"));
+        useHeading->setToolTip(toolTipText(tr("Require this property to match. All checked properties must match together. "
+            "Unchecked values are remembered but never used for matching.")));
+        table->addWidget(withInfo(useHeading), 0, 0);
         table->addWidget(plainLabel(tr("Window property")), 0, 1);
-        table->addWidget(plainLabel(tr("Match")), 0, 2);
+        auto matchHeading = plainLabel(tr("Match"));
+        matchHeading->setObjectName(QStringLiteral("matchHeading"));
+        matchHeading->setToolTip(toolTipText(tr("Exact match compares the complete value. Substring match finds a literal part. "
+            "Regular expression uses a case-sensitive PCRE2 pattern. Scrolling does not change a match mode.")));
+        table->addWidget(withInfo(matchHeading), 0, 2);
         table->addWidget(plainLabel(tr("Value")), 0, 3);
         int row = 1;
         for (const auto &key : fields) {
-            if (key == QLatin1String("legacyClass") && !match.contains(key))
+            if (key == QLatin1String("legacyClass") && !match.contains(key) && !rule.value(QStringLiteral("inactiveMatch")).toMap().contains(key))
                 continue;
             auto use = new QCheckBox;
             use->setObjectName(key + QStringLiteral("Use"));
@@ -910,7 +935,8 @@ class RuleDialog : public QDialog {
             value->setObjectName(key + QStringLiteral("Value"));
             value->setMaxLength(1024);
             value->setAccessibleName(fieldLabel(key));
-            const auto condition = match.value(key).toMap();
+            const auto condition = match.contains(key) ? match.value(key).toMap()
+                : rule.value(QStringLiteral("inactiveMatch")).toMap().value(key).toMap();
             use->setChecked(match.contains(key));
             op->setCurrentIndex(std::max(0, op->findData(condition.value(QStringLiteral("operator")))));
             value->setText(condition.value(QStringLiteral("value")).toString());
@@ -921,12 +947,31 @@ class RuleDialog : public QDialog {
             label->setObjectName(key + QStringLiteral("Label"));
             label->setWordWrap(false);
             table->addWidget(withInfo(label), row, 1);
-            table->addWidget(withInfo(op, nullptr, true), row, 2);
+            table->addWidget(op, row, 2);
             table->addWidget(value, row++, 3);
-            auto updateEnabled = [use, op, value]() {
+            const auto normalPalette = value->palette();
+            auto updateEnabled = [use, op, value, key, normalPalette]() {
                 op->setEnabled(use->isChecked());
-                value->setEnabled(use->isChecked() || value->property("minimize2traySuggestion").toBool());
+                const bool remembered = !use->isChecked() && !value->text().isEmpty() &&
+                    !value->property("minimize2traySuggestion").toBool();
+                value->setEnabled(use->isChecked() || remembered || value->property("minimize2traySuggestion").toBool());
+                value->setReadOnly(!use->isChecked());
+                auto colors = normalPalette;
+                if (remembered) {
+                    const auto link = KColorScheme(QPalette::Active).foreground(KColorScheme::LinkText).color();
+                    const auto base = normalPalette.color(QPalette::Disabled, QPalette::Base);
+                    const QColor faded((link.red()*3+base.red())/4, (link.green()*3+base.green())/4,
+                                       (link.blue()*3+base.blue())/4);
+                    colors.setColor(QPalette::Base, base);
+                    colors.setColor(QPalette::Text, faded);
+                    value->setToolTip(toolTipText(tr("Last user-selected value. This property is not in use and does not affect matching. "
+                        "The value may be outdated or unsuitable; verify it before enabling Use.") + QLatin1Char('\n') + fieldToolTip(key)));
+                } else if (!value->property("minimize2traySuggestion").toBool()) {
+                    value->setToolTip(toolTipText(fieldToolTip(key)));
+                }
+                if (!value->property("minimize2traySuggestion").toBool()) value->setPalette(colors);
             };
+            connect(value, &QLineEdit::textChanged, this, updateEnabled);
             updateEnabled();
             connect(use, &QCheckBox::toggled, this, updateEnabled);
             connect(use, &QCheckBox::toggled, this,
@@ -941,7 +986,6 @@ class RuleDialog : public QDialog {
             connect(use, &QCheckBox::toggled, this, &RuleDialog::edited);
             connect(op, &QComboBox::currentIndexChanged, this, &RuleDialog::edited);
             connect(value, &QLineEdit::textChanged, this, &RuleDialog::edited);
-            value->setToolTip(toolTipText(fieldToolTip(key)));
         }
         outer->addLayout(table);
         outer->addWidget(plainLabel(tr("All selected properties must match. Separate editors may also be Normal "
@@ -979,6 +1023,19 @@ class RuleDialog : public QDialog {
         scroll->setWidget(content);
         dialogLayout->addWidget(scroll, 1);
         dialogLayout->addWidget(m_error);
+        m_nativeWarning = plainLabel(QString());
+        m_nativeWarning->setObjectName(QStringLiteral("nativeTrayWarning"));
+        m_nativeWarning->setMargin(10);
+        m_nativeWarning->setAutoFillBackground(true);
+        auto warningColors = m_nativeWarning->palette();
+        const KColorScheme warningScheme(QPalette::Active);
+        warningColors.setColor(QPalette::Window, warningScheme.background(KColorScheme::NeutralBackground).color());
+        warningColors.setColor(QPalette::WindowText, warningScheme.foreground(KColorScheme::NeutralText).color());
+        m_nativeWarning->setPalette(warningColors);
+        auto warningFont = m_nativeWarning->font(); warningFont.setBold(true); warningFont.setPointSizeF(warningFont.pointSizeF()+1);
+        m_nativeWarning->setFont(warningFont);
+        m_nativeWarning->hide();
+        dialogLayout->addWidget(m_nativeWarning);
         dialogLayout->addWidget(pendingNotice);
         auto buttons = new QDialogButtonBox(QDialogButtonBox::Help | QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
         buttons->button(QDialogButtonBox::Help)
@@ -1005,13 +1062,17 @@ class RuleDialog : public QDialog {
         });
         connect(m_startupProtection, &QCheckBox::toggled, this, &RuleDialog::edited);
         connect(m_minimize, &QComboBox::currentIndexChanged, this, &RuleDialog::edited);
+        connect(m_skipNative, &QCheckBox::toggled, this, &RuleDialog::edited);
         connect(m_close, &QCheckBox::toggled, this, &RuleDialog::edited);
         connect(m_quitOnLogout, &QCheckBox::toggled, this, &RuleDialog::edited);
         connect(m_title, &QLineEdit::textChanged, this, &RuleDialog::edited);
         connect(m_description, &QPlainTextEdit::textChanged, this, &RuleDialog::edited);
         // Compare final editor contents, not whether a control was clicked.
         // Accepting or undoing edits back to the generated values keeps the flag.
+        m_nativeTray = new NativeTrayMonitor(this);
+        connect(m_nativeTray, &NativeTrayMonitor::changed, this, &RuleDialog::updatePreview);
         m_initialRule = this->rule();
+        connect(applicationIndexNotifier(), SIGNAL(changed()), this, SLOT(updatePreview()));
         QTimer::singleShot(0, this, &RuleDialog::refreshPreview);
     }
 
@@ -1055,19 +1116,25 @@ class RuleDialog : public QDialog {
                         {QStringLiteral("startInTray"), m_startup->currentData() == QLatin1String("hide")},
                         {QStringLiteral("minimizeToTray"), m_minimize->currentData()},
                         {QStringLiteral("closeToTray"), m_close->isChecked()},
+                        {QStringLiteral("skipNativeTray"), m_skipNative->isChecked()},
                         {QStringLiteral("terminateOnLogout"), m_quitOnLogout->isChecked()},
                         {QStringLiteral("startupProtection"), (m_startup->currentData() == QLatin1String("hide") ||
                                                                m_startup->currentData() == QLatin1String("inherit")) &&
                                                                   m_startupProtection->isChecked()}};
         QVariantMap match{{QStringLiteral("windowTypes"), m_type->currentData()},
                           {QStringLiteral("includeChildren"), !m_children->isChecked()}};
+        QVariantMap inactive;
         for (auto it = m_conditions.begin(); it != m_conditions.end(); ++it) {
+            if (!it->use->isChecked() && !it->value->text().trimmed().isEmpty() &&
+                !it->value->property("minimize2traySuggestion").toBool())
+                inactive[it.key()] = QVariantMap{{QStringLiteral("operator"), it->op->currentData()}, {QStringLiteral("value"), it->value->text()}};
             if (it->use->isChecked())
                 match[it.key()] = QVariantMap{{QStringLiteral("operator"), it->op->currentData()},
                                               {QStringLiteral("value"), it->value->text()}};
         }
         result[QStringLiteral("iconOverride")] = QVariantMap{{QStringLiteral("enabled"), m_iconEnabled->isChecked()},
                                                              {QStringLiteral("path"), m_iconPath->text()}};
+        result[QStringLiteral("inactiveMatch")] = inactive;
         result[QStringLiteral("match")] = match;
         if (!m_initialRule.isEmpty() && result != m_initialRule)
             result[QStringLiteral("autoCreated")] = false;
@@ -1186,6 +1253,7 @@ class RuleDialog : public QDialog {
         if (!m_preview)
             return;
         m_preview->clear();
+        setMessage(m_nativeWarning, QString());
         QVariantList checked;
         QString error;
         const auto candidate = rule();
@@ -1193,12 +1261,32 @@ class RuleDialog : public QDialog {
             new QTreeWidgetItem(m_preview, {tr("Choose matching properties"), error});
             return;
         }
+        QStringList nativeApps;
         for (const auto &entry : m_windows) {
             const auto info = entry.toMap();
+            if (m_nativeTray && matchFailure(candidate, info).isEmpty() && m_nativeTray->hasNativeTray(info)) nativeApps.append(appName(info));
             const QString reason = matchFailure(candidate, info);
-            new QTreeWidgetItem(m_preview, {info.value(QStringLiteral("caption")).toString(),
-                                            reason.isEmpty() ? tr("Matches") : reason});
+            auto item = new QTreeWidgetItem(m_preview, {info.value(QStringLiteral("caption")).toString(),
+                                                        reason.isEmpty() ? tr("Matches") : reason});
+            const bool unsafe = protectedWindow(info) || (info.contains(QStringLiteral("minimizable")) &&
+                (!info.value(QStringLiteral("minimizable")).toBool() || info.value(QStringLiteral("modal")).toBool() ||
+                 info.value(QStringLiteral("specialWindow")).toBool() || Minimize2Tray::windowType(info) == QLatin1String("other")));
+            if (reason.isEmpty() || unsafe) {
+                const KColorScheme colors(QPalette::Active);
+                auto font = item->font(0);
+                font.setBold(reason.isEmpty());
+                font.setItalic(unsafe);
+                for (int column = 0; column < m_preview->columnCount(); ++column) {
+                    item->setBackground(column, colors.background(unsafe ? KColorScheme::NegativeBackground : KColorScheme::PositiveBackground));
+                    if (unsafe) item->setForeground(column, colors.foreground(KColorScheme::InactiveText));
+                    item->setFont(column, font);
+                }
+            }
         }
+        nativeApps.removeDuplicates();
+        setMessage(m_nativeWarning, nativeApps.isEmpty() ? QString() : tr("A native tray icon is already active for: %1. "
+            "Disable the application's native tray in its own settings if you want Minimize2Tray to be the sole tray manager. "
+            "Alternatively, enable the optional native-tray skip for this rule.").arg(nativeApps.mid(0,8).join(QStringLiteral(", "))));
         if (!m_previewNote.isEmpty())
             new QTreeWidgetItem(m_preview, {m_previewNote, QString()});
         else if (m_windows.isEmpty())
@@ -1344,6 +1432,9 @@ class RuleDialog : public QDialog {
     QCheckBox *m_startupProtection;
     QComboBox *m_minimize;
     QCheckBox *m_close;
+    QCheckBox *m_skipNative;
+    QLabel *m_nativeWarning = nullptr;
+    NativeTrayMonitor *m_nativeTray = nullptr;
     QCheckBox *m_quitOnLogout;
     QComboBox *m_type;
     QCheckBox *m_children;
@@ -1364,6 +1455,7 @@ class Minimize2TrayConfig : public KCModule {
   public:
     Minimize2TrayConfig(QObject *parent, const KPluginMetaData &data, const QVariantList &args)
         : KCModule(parent, data), m_config(QStringLiteral("kwinrc")) {
+        Minimize2Tray::loadTranslations();
         setButtons(Help | Apply | Default);
         auto outer = new QVBoxLayout(widget());
         outer->setContentsMargins(16, 16, 16, 16);
@@ -1512,6 +1604,25 @@ class Minimize2TrayConfig : public KCModule {
         m_debug->setToolTip(toolTipText(
             tr("Write diagnostic messages to KWin’s logs for troubleshooting. Leave off during normal use.")));
         advancedLayout->addWidget(m_debug);
+        m_timing = new QCheckBox(tr("Record startup and tray timing"));
+        m_timing->setObjectName(QStringLiteral("startupDiagnostics"));
+        m_timing->setToolTip(toolTipText(tr("With debug logging enabled, record bounded timing for initial rule processing, tray item creation and launcher metadata resolution, plus window removal events. Window titles are not logged.")));
+        auto timingRow = new QHBoxLayout; timingRow->addSpacing(24); timingRow->addWidget(m_timing); advancedLayout->addLayout(timingRow);
+        connect(m_debug, &QCheckBox::toggled, this, [this](bool enabled) {
+            m_timing->setEnabled(enabled);
+            if (!enabled) m_timing->setChecked(false);
+        });
+        m_recoverInput = new QCheckBox(tr("Recover stale XEmbed tray input (Wayland)"));
+        m_recoverInput->setObjectName(QStringLiteral("recoverTrayInput"));
+        m_recoverInput->setToolTip(toolTipText(tr("Off by default. While Minimize2Tray icons exist, check verified XEmbedSNIProxy containers for input regions stuck for at least one second. "
+            "Clear only those stale regions when no mouse button is held. No services are restarted and native tray registrations are preserved. "
+            "Requires the optional XCB recovery helper; unidentified containers are left untouched.")));
+        advancedLayout->addWidget(m_recoverInput);
+#if !MINIMIZE2TRAY_HAS_TRAY_RECOVERY
+        // Permit disabling a previously saved option even when this build has no helper.
+        connect(m_recoverInput, &QCheckBox::toggled, m_recoverInput, &QWidget::setEnabled);
+        advancedLayout->addWidget(plainLabel(tr("Tray input recovery is unavailable in this build. No proxy windows will be changed.")));
+#endif
         advancedLayout->addWidget(plainLabel(tr("Minimize2Tray, System Settings, configuration hosts, modal dialogs "
                                                 "and system surfaces are protected from hiding.")));
         advancedLayout->addStretch();
@@ -1572,6 +1683,8 @@ class Minimize2TrayConfig : public KCModule {
         connect(m_dot, &QCheckBox::toggled, this, &Minimize2TrayConfig::changed);
         connect(m_hide, &QCheckBox::toggled, this, &Minimize2TrayConfig::changed);
         connect(m_debug, &QCheckBox::toggled, this, &Minimize2TrayConfig::changed);
+        connect(m_timing, &QCheckBox::toggled, this, &Minimize2TrayConfig::changed);
+        connect(m_recoverInput, &QCheckBox::toggled, this, &Minimize2TrayConfig::changed);
         connect(m_limit, &QSpinBox::valueChanged, this, &Minimize2TrayConfig::changed);
         m_stateConnections.append(connect(m_search, &QLineEdit::textChanged, this, [this](const QString &value) {
             if (!m_uiHidden)
@@ -1669,6 +1782,12 @@ class Minimize2TrayConfig : public KCModule {
         m_globalStartup->setCurrentIndex(m_globalStartup->findData(values.value(QStringLiteral("startupAction"))));
         m_hide->setChecked(values.value(QStringLiteral("hideOnMinimize")).toBool());
         m_debug->setChecked(values.value(QStringLiteral("debugEnabled")).toBool());
+        m_timing->setChecked(values.value(QStringLiteral("startupDiagnostics")).toBool());
+        m_timing->setEnabled(m_debug->isChecked());
+        m_recoverInput->setChecked(values.value(QStringLiteral("recoverTrayInput")).toBool());
+#if !MINIMIZE2TRAY_HAS_TRAY_RECOVERY
+        m_recoverInput->setEnabled(m_recoverInput->isChecked());
+#endif
         m_loaded = values;
         m_loaded.insert(QStringLiteral("rules"), KConfigGroup(&m_config, ConfigGroup).readEntry("rules", QString()));
         setMessage(m_error, error);
@@ -1706,7 +1825,7 @@ class Minimize2TrayConfig : public KCModule {
             return;
         }
         for (const auto *key :
-             {"rules", "countUseDot", "countDisplayLimit", "hideOnMinimize", "startupAction", "debugEnabled"}) {
+             {"rules", "countUseDot", "countDisplayLimit", "hideOnMinimize", "startupAction", "debugEnabled", "startupDiagnostics", "recoverTrayInput"}) {
             if (group.isEntryImmutable(key)) {
                 saveError(tr("A setting is locked by the system administrator."));
                 return;
@@ -1727,6 +1846,7 @@ class Minimize2TrayConfig : public KCModule {
                                   : previousSchema == QJsonValue(5) ? QStringLiteral("rulesSchema5Backup")
                                   : previousSchema == QJsonValue(6) ? QStringLiteral("rulesSchema6Backup")
                                   : previousSchema == QJsonValue(7) ? QStringLiteral("rulesSchema7Backup")
+                                  : previousSchema == QJsonValue(8) ? QStringLiteral("rulesSchema8Backup")
                                                                     : QString();
         if (!backupKey.isEmpty() && !group.hasKey(backupKey)) {
             if (group.isEntryImmutable(backupKey)) {
@@ -1741,6 +1861,8 @@ class Minimize2TrayConfig : public KCModule {
         group.writeEntry("startupAction", m_globalStartup->currentData().toString());
         group.writeEntry("hideOnMinimize", m_hide->isChecked());
         group.writeEntry("debugEnabled", m_debug->isChecked());
+        group.writeEntry("startupDiagnostics", m_debug->isChecked() && m_timing->isChecked());
+        group.writeEntry("recoverTrayInput", m_recoverInput->isChecked());
         if (!m_pendingSort.isEmpty())
             viewState.writeEntry("sort", m_pendingSort);
         if (!m_config.sync()) {
@@ -1777,6 +1899,8 @@ class Minimize2TrayConfig : public KCModule {
         m_globalStartup->setCurrentIndex(m_globalStartup->findData(QStringLiteral("hide")));
         m_hide->setChecked(false);
         m_debug->setChecked(false);
+        m_timing->setChecked(false);
+        m_recoverInput->setChecked(false);
         m_loading = false;
         changed();
     }
@@ -2097,7 +2221,7 @@ class Minimize2TrayConfig : public KCModule {
         layout->addWidget(duplicates);
         auto options = new QCheckBox(tr("Import application options (including sorting)"));
         options->setObjectName(QStringLiteral("importOptions"));
-        options->setToolTip(toolTipText(tr("Replace the four application options and sorting with values from the "
+        options->setToolTip(toolTipText(tr("Replace the application options and sorting with values from the "
                                            "backup. Leave unchecked to keep current values and pending edits.")));
         layout->addWidget(options);
         layout->addWidget(plainLabel(tr("Selected options replace current options. Unselected items keep their current "
@@ -2149,6 +2273,8 @@ class Minimize2TrayConfig : public KCModule {
                     m_globalStartup->findData(backup.settings.value(QStringLiteral("startupAction"))));
                 m_hide->setChecked(backup.settings.value(QStringLiteral("hideOnMinimize")).toBool());
                 m_debug->setChecked(backup.settings.value(QStringLiteral("debugEnabled")).toBool());
+                m_timing->setChecked(backup.settings.value(QStringLiteral("startupDiagnostics")).toBool());
+                m_recoverInput->setChecked(backup.settings.value(QStringLiteral("recoverTrayInput")).toBool());
                 // Keep imported sorting pending until Apply, just like other options.
                 m_pendingSort = backup.sortOrder;
             }
@@ -2362,7 +2488,9 @@ class Minimize2TrayConfig : public KCModule {
                 {QStringLiteral("countDisplayLimit"), m_limit->value()},
                 {QStringLiteral("hideOnMinimize"), m_hide->isChecked()},
                 {QStringLiteral("startupAction"), m_globalStartup->currentData()},
-                {QStringLiteral("debugEnabled"), m_debug->isChecked()}};
+                {QStringLiteral("debugEnabled"), m_debug->isChecked()},
+                {QStringLiteral("startupDiagnostics"), m_debug->isChecked() && m_timing->isChecked()},
+                {QStringLiteral("recoverTrayInput"), m_recoverInput->isChecked()}};
     }
     KConfig m_config;
     RuleModel *m_model;
@@ -2381,6 +2509,8 @@ class Minimize2TrayConfig : public KCModule {
     QComboBox *m_globalStartup;
     QCheckBox *m_hide;
     QCheckBox *m_debug;
+    QCheckBox *m_timing;
+    QCheckBox *m_recoverInput;
     QVariantMap m_loaded;
     QString m_loadError;
     QString m_pendingSort;

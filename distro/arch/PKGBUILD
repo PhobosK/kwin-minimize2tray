@@ -1,17 +1,17 @@
 # SPDX-License-Identifier: GPL-3.0-only
 # Run distro/prepare.py arch OUTPUT first to fill the verified source checksum.
 pkgname=kwin6-script-minimize2tray
-pkgver=2.4.2
+pkgver=3.0.0
 pkgrel=1
 pkgdesc='Minimize application windows to the tray in KDE Plasma 6 (PhobosK fork)'
 arch=('x86_64')
 url='https://github.com/PhobosK/kwin-minimize2tray'
 license=('GPL-3.0-only')
 depends=('libgcc' 'libstdc++' 'glibc' 'qt6-base>=6.6' 'qt6-declarative>=6.6'
-         'kconfig>=6.0' 'kcoreaddons>=6.0' 'kcmutils>=6.0' 'kservice>=6.0'
+         'ki18n>=6.0' 'kcolorscheme>=6.0' 'libxcb' 'kconfig>=6.0' 'kcoreaddons>=6.0' 'kcmutils>=6.0' 'kservice>=6.0'
          'kstatusnotifieritem>=6.0' 'kwindowsystem>=6.0' 'kxmlgui>=6.0'
          'kwin>=6.0' 'plasma-workspace>=6.0' 'khelpcenter')
-makedepends=('kdoctools>=6.0' 'cmake>=3.19' 'extra-cmake-modules>=6.0' 'ninja'
+makedepends=('qt6-tools>=6.6' 'pkgconf' 'kdoctools>=6.0' 'cmake>=3.19' 'extra-cmake-modules>=6.0' 'ninja'
              'linux-api-headers>=6.13' 'vulkan-headers')
 _source_name="kwin-minimize2tray-${pkgver}.tar.gz"
 _source_dir="kwin-minimize2tray-${pkgver}"

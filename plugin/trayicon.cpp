@@ -1,5 +1,7 @@
 #include "trayicon.h"
+#include "translation.h"
 #include "applicationidentity.h"
+#include "diagnostics.h"
 #include <KService>
 #include <KSycoca>
 #include <QAction>
@@ -231,6 +233,7 @@ class LauncherAPI : public QObject {
 };
 
 TrayIcon::TrayIcon(QObject *parent) : QObject(parent), m_launcherAPI(LauncherAPI::instance()) {
+    Minimize2Tray::loadTranslations();
     connect(m_launcherAPI.data(), &LauncherAPI::updated, this, [this](const QString &url) {
         if (url == m_launcherUrl) {
             launcherAPIUpdate(url, m_launcherAPI->properties(url));
@@ -240,6 +243,7 @@ TrayIcon::TrayIcon(QObject *parent) : QObject(parent), m_launcherAPI(LauncherAPI
     connect(this, &TrayIcon::xdgNameChanged, this, &TrayIcon::scheduleApplicationUpdate);
     // Queue cache refreshes to avoid re-entering KService lookups.
     connect(KSycoca::self(), &KSycoca::databaseChanged, this, &TrayIcon::scheduleApplicationUpdate);
+    connect(Minimize2Tray::applicationIndexNotifier(), SIGNAL(changed()), this, SLOT(scheduleApplicationUpdate()));
     // Wait until QML has assigned all initial window properties.
     QTimer::singleShot(0, this, [this]() {
         initializeTrayIcon();
@@ -381,6 +385,7 @@ void TrayIcon::setXdgName(const QString &id) {
 }
 
 void TrayIcon::initializeTrayIcon() {
+    Minimize2Tray::StartupSpan timing("tray item creation", m_windowId.toString());
     if (trayIcon) {
         return;
     }
@@ -388,6 +393,7 @@ void TrayIcon::initializeTrayIcon() {
     trayIcon = new KStatusNotifierItem(m_xdgName.isEmpty() ? m_windowId.toString() : m_xdgName, this);
     // Own Quit to provide a tooltip and keep it scoped to this window.
     trayIcon->setStandardActionsEnabled(false);
+    Minimize2Tray::startupEvent("SNI item created", m_windowId.toString());
     m_menu = new QMenu();
     m_menu->setToolTipsVisible(true);
 

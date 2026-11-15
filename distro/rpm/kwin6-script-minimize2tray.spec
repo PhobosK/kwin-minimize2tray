@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
-# Override the release with --define 'release_version 2.4.2'.
+# Override the release with --define 'release_version 3.0.0'.
 # To build a commit instead, also add --define 'commit FULL_SHA'.
-%{!?release_version:%global release_version 2.4.2}
+%{!?release_version:%global release_version 3.0.0}
 
 # Download the fixed archive when it is missing from SOURCES.
 %global _disable_source_fetch 0
@@ -30,6 +30,13 @@ BuildRequires:  cmake(Qt6DBus) >= 6.6.0
 BuildRequires:  cmake(Qt6Gui) >= 6.6.0
 BuildRequires:  cmake(Qt6Qml) >= 6.6.0
 BuildRequires:  cmake(Qt6Widgets) >= 6.6.0
+BuildRequires:  cmake(Qt6Concurrent) >= 6.6.0
+BuildRequires:  cmake(Qt6LinguistTools) >= 6.6.0
+BuildRequires:  cmake(KF6I18n) >= 6.0.0
+BuildRequires:  cmake(KF6ColorScheme) >= 6.0.0
+BuildRequires:  pkgconfig(xcb)
+BuildRequires:  pkgconfig(xcb-shape)
+BuildRequires:  pkgconfig(xcb-res)
 BuildRequires:  cmake(KF6Config) >= 6.0.0
 BuildRequires:  cmake(KF6CoreAddons) >= 6.0.0
 BuildRequires:  cmake(KF6KCMUtils) >= 6.0.0
@@ -63,11 +70,18 @@ module. This package builds the PhobosK fork for KDE Plasma 6.
 %license LICENSE
 %doc README.md CONTRIBUTING.md
 %{_datadir}/doc/HTML/en/kwin-minimize2tray/
+%{_datadir}/doc/HTML/bg/kwin-minimize2tray/
+%{_datadir}/kwin-minimize2tray/translations/
 %{_datadir}/kwin/scripts/com.github.luisbocanegra.minimize2tray/
 %{_libdir}/qt6/qml/com/github/luisbocanegra/trayicon/
 %{_libdir}/qt6/plugins/kwin/effects/configs/kcm_minimize2tray.so
 
 %changelog
+* Sun Nov 15 2026 PhobosK <PhobosK@users.noreply.github.com> - 3.0.0-1
+- Improve tray reliability, rule editing, startup performance and diagnostics.
+- Add native tray conflict handling and Bulgarian interface and help.
+- Allow GitHub release-asset redirects for online package preparation.
+
 * Sat Nov 14 2026 PhobosK
 - Release 2.4.2: simplify rule help and prevent accidental Match changes.
 - Improve tray option ordering and handbook presentation.

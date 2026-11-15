@@ -31,7 +31,7 @@ You can read more about why I chose this approach in [AI_DISCLOSURE.md](AI_DISCL
 
 ## Installation
 
-Install Python 3.12+, CMake 3.19+, a C++20 compiler, ECM, KDE’s `kcmshell6` configuration host, Qt 6.6+ development files (DBus, Gui, Qml, Widgets) KDE DocTools 6 (`meinproc6`), KHelpCenter for the installed handbook, and KF6 development files (Config, CoreAddons, Service, StatusNotifierItem, KCMUtils, XmlGui). The RPM spec lists openSUSE dependencies. Optional **Quit on logout** support also needs Linux 6.13+ headers and the KWin 6.8+ SDK with its Wayland development dependencies; the isolated adapter uses the SDK’s compiler requirements. Rebuild after KWin updates. Without that SDK, other features still build normally. Disable the adapter with `-DBUILD_SESSION_TERMINATION=OFF`.
+Install Python 3.12+, CMake 3.19+, a C++20 compiler, ECM, KDE’s `kcmshell6` configuration host, Qt 6.6+ development files (DBus, Gui, Qml, Widgets, Concurrent and LinguistTools), KDE DocTools 6 (`meinproc6`), KHelpCenter for the installed handbook, and KF6 development files (Config, CoreAddons, Service, StatusNotifierItem, KCMUtils, XmlGui, ColorScheme, I18n). The RPM spec lists openSUSE dependencies. Optional **Quit on logout** support also needs Linux 6.13+ headers and the KWin 6.8+ SDK with its Wayland development dependencies; the isolated adapter uses the SDK’s compiler requirements. Rebuild after KWin updates. Without that SDK, other features still build normally. Disable the adapter with `-DBUILD_SESSION_TERMINATION=OFF`.
 
 ```sh
 git clone https://github.com/PhobosK/kwin-minimize2tray.git
@@ -41,7 +41,7 @@ cd kwin-minimize2tray
 
 Run as a regular user. The installer builds the fork's latest stable `X.Y.Z`/`vX.Y.Z` tag and installs under `/usr`, using sudo only for final copies. It leaves the checkout and existing `build/` alone. Network failures stop installation.
 
-Use `./install.sh --local` for unpublished checkout changes, or `./install.sh --version 2.4.2` for a specific release. Both installers offer `--help` for source selection, commit pinning, prefixes, staged installation and offline archives.
+Use `./install.sh --local` for unpublished checkout changes, or `./install.sh --version 3.0.0` for a specific release. Both installers offer `--help` for source selection, commit pinning, prefixes, staged installation and offline archives.
 
 ### Immutable/user installation
 
@@ -56,7 +56,7 @@ For a custom prefix, use the paths printed by the installer. A user installation
 
 ### openSUSE Tumbleweed RPM
 
-The standalone spec builds this fork only. It defaults to tag `v2.4.2`; `release_version` sets both the RPM and application version. It downloads the selected archive if missing from RPM's `SOURCES` directory.
+The standalone spec builds this fork only. It defaults to tag `v3.0.0`; `release_version` sets both the RPM and application version. It downloads the selected archive if missing from RPM's `SOURCES` directory.
 
 ```sh
 rpmbuild -ba distro/rpm/kwin6-script-minimize2tray.spec
@@ -71,7 +71,7 @@ rpmbuild -ba --define 'release_version 0.4.0' distro/rpm/kwin6-script-minimize2t
 Or select a full commit SHA with an explicit application version:
 
 ```sh
-rpmbuild -ba --define 'release_version 2.4.2' --define 'commit FULL_SHA' distro/rpm/kwin6-script-minimize2tray.spec
+rpmbuild -ba --define 'release_version 3.0.0' --define 'commit FULL_SHA' distro/rpm/kwin6-script-minimize2tray.spec
 ```
 
 The tag format is `vX.Y.Z`. Selected sources must contain this fork's native configuration module and current CMake version option.
@@ -119,7 +119,7 @@ On Gentoo, register the prepared `overlay` directory as a local repository with 
 
 In GitHub Actions, the default `all` target covers Tumbleweed, Debian 13, Ubuntu 26.04 LTS, Arch Linux and the Gentoo overlay checks. The `archlinux` and `gentoo` selections run just those checks without publishing; publication requires `all`. Local VS Code tasks provide the same choices. A release contains the source archive, three RPM/DEB packages, the Arch binary and recipes, the Gentoo overlay and `SHA256SUMS`.
 
-Manual runs build the immutable commit selected by the workflow ref. To test an existing tag, use its VS Code task or `gh workflow run release-packages.yml --repo PhobosK/kwin-minimize2tray --ref v2.4.2 -f tag=v2.4.2 -f publish=false`. The `tag` input only verifies that ref; a run on `main` cannot select another tag’s source. Tag dispatch uses the workflow definition stored at that tag, so new workflow fixes require a new tag containing them. Shared Actions cache access remains disabled for release jobs.
+Manual runs build the immutable commit selected by the workflow ref. To test an existing tag, use its VS Code task or `gh workflow run release-packages.yml --repo PhobosK/kwin-minimize2tray --ref v3.0.0 -f tag=v3.0.0 -f publish=false`. The `tag` input only verifies that ref; a run on `main` cannot select another tag’s source. Tag dispatch uses the workflow definition stored at that tag, so new workflow fixes require a new tag containing them. Shared Actions cache access remains disabled for release jobs.
 
 ### Developer build
 
@@ -156,7 +156,19 @@ Overlapping rules combine actions: Start in tray wins over pin-only; Minimize On
 
 **Enable debug logging** records rule behavior changes and tray actions in KWin’s logs, identified by window IDs.
 
-The standard **Help** button in configuration opens the installed KDE handbook; Help in the rule editor opens its rule chapter. Small information icons beside selected labels and Match choices repeat their tooltips on hover. Match choices ignore mouse-wheel scrolling. Match modes are **Exact match**, **Substring match** and **Regular expression** (case-sensitive, with execution limits). **Whole window class** matches instance and class together, as in KWin rules. The open-window preview sorts by either column, initially by Window.
+The standard **Help** button in configuration opens the installed KDE handbook; Help in the rule editor opens its rule chapter. Small information icons beside property labels and the Use/Match column headings repeat their tooltips on hover. Match choices ignore mouse-wheel scrolling. Match modes are **Exact match**, **Substring match** and **Regular expression** (case-sensitive, with execution limits). **Whole window class** matches instance and class together, as in KWin rules. The open-window preview sorts by either column, initially by Window; matches have a theme-positive whole-row background and bold text, while protected/unsafe windows have a theme-negative background and faded italic text.
+
+Saving with 3.0.0 upgrades rules to format 9 and keeps the previous rule document in a migration backup. Earlier versions cannot read format 9; retain a configuration export from the earlier version before downgrading.
+
+Unchecked properties retain their last user-selected value and match mode separately from active matching. Their read-only values use an inactive background and muted theme-link text, with a tooltip warning to verify old values before re-enabling them. Inactive values never match windows. Suggestions remain separate and are not saved as user-selected values unless accepted.
+
+Native tray conflicts are detected asynchronously from the live SNI registry, using process or exact application identity. The editor warns above its save notice; disable the app's own tray if Minimize2Tray should manage it alone. The per-rule **Skip when a native tray is active** option is Off by default, excludes Minimize2Tray's own items, and never guesses unidentified entries. Late registrations release automatic actions owned only by that rule; other rules and manual pins remain independent. No downloadable app list is maintained.
+
+**Advanced → Record startup and tray timing** requires debug logging; turning debug logging off also turns timing off. Timing logs contain bounded first-use measurements, SNI creation and window-removal events, with monotonic timestamps and window IDs rather than captions. Launcher indexing and installed desktop-file lookups run on a background worker and startup reconciliation is batched.
+
+For partially unclickable icons in Wayland, the optional **Recover stale XEmbed tray input** workaround is Off by default. It checks only verified, same-user XEmbedSNIProxy containers whose input region stays stuck for a second without mouse-button or geometry activity. A short-lived worker has a four-second timeout; it does not restart services, remove registrations or move windows. Build support needs pkg-config and the `xcb`, `xcb-shape`, and `xcb-res` development libraries. Unidentified containers are left alone; live verification is still required for upstream proxy/host bugs. SNI icons cannot be individually raised above other windows by Minimize2Tray.
+
+Bulgarian interface and KHelpCenter translations follow KDE's language preferences; English remains the fallback. Catalogs build automatically with Qt LinguistTools. To update translatable sources, use `lupdate6 plugin package -no-obsolete -locations none -ts translations/minimize2tray_bg.ts`, translate unfinished entries, then rebuild. Add new catalogs to `plugin/CMakeLists.txt` and handbook languages to `handbook/CMakeLists.txt`.
 
 Launcher discovery uses installed desktop IDs, `StartupWMClass` and executable metadata, including for apps launched by systemd. Ambiguous aliases are left unresolved. **Override the tray icon**, off by default, chooses a local `.desktop` file or supported image without changing matching; desktop commands are never run. Keep the chosen file available. If overrides overlap, the first in stored rule order wins. Do not add an unrelated Application ID just to select an icon.
 

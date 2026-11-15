@@ -64,7 +64,8 @@ def valid_tag(tag):
 
 def allowed_url(url):
     parts = urllib.parse.urlsplit(url)
-    require(parts.scheme == "https" and parts.hostname in {"api.github.com", "github.com", "codeload.github.com"}
+    require(parts.scheme == "https" and parts.hostname in {"api.github.com", "github.com", "codeload.github.com",
+                                                         "release-assets.githubusercontent.com"}
             and parts.port in (None, 443) and not parts.username and not parts.password, "Unsafe download redirect.")
 
 
@@ -242,7 +243,7 @@ def extract(archive, target):
 def snapshot(target):
     target.mkdir()
     # Copy only build inputs, including unpublished edits; never copy .git, credentials or developer artifacts.
-    for name in ("CMakeLists.txt", "plugin", "package", "cmake", "handbook", "LICENSE", "README.md", "CONTRIBUTING.md"):
+    for name in ("CMakeLists.txt", "plugin", "package", "cmake", "handbook", "translations", "LICENSE", "README.md", "CONTRIBUTING.md"):
         source = ROOT / name
         if not source.exists():
             continue

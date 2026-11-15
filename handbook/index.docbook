@@ -6,7 +6,7 @@
 <book id="kwin-minimize2tray" lang="&language;">
 <bookinfo>
 <title>The Minimize2Tray Handbook</title>
-<date>2026-11-14</date><releaseinfo>2.4.2</releaseinfo>
+<date>2026-11-15</date><releaseinfo>3.0.0</releaseinfo>
 <abstract><para>Window rules and tray controls for the PhobosK fork of KWin Minimize2Tray.</para></abstract>
 <keywordset><keyword>KDE</keyword><keyword>KWin</keyword><keyword>Minimize2Tray</keyword></keywordset>
 </bookinfo>
@@ -100,7 +100,9 @@
 </sect2>
 <sect2 id="preview-help"><title>Preview and inline help</title>
 <para><guilabel>Preview with open windows</guilabel> uses your <emphasis>unsaved edits</emphasis>. Click its column headings to sort by Window or Result; the default is Window, ascending. <guibutton>Refresh</guibutton> obtains current properties. The script must be enabled to verify eligibility.</para>
-<para>Small circled information icons beside selected labels and Match dropdowns repeat the corresponding tooltip on hover, including for disabled options. The pointer becomes a help cursor. Use and Value cells have no additional icons; their existing hover tooltips still work.</para>
+<para>Small circled information icons beside property labels and the Use and Match column headings show explanations on hover. Individual Use cells, Match dropdowns and Value cells have no extra icons. Their normal hover tooltips still work.</para>
+<para>Unchecked properties retain their last user-selected value and match mode. The value is read-only, with an inactive background and a muted theme-link color; its tooltip warns that the value may be outdated or unsuitable. Re-enable Use to edit it. These values never participate in matching while unchecked.</para>
+<para>Matching windows have a theme-positive background across the whole row and bold text. Protected or unsafe windows have a theme-negative background and faded italic text. Other non-matches keep the ordinary presentation.</para>
 <tip><title>Scroll without changing your rule</title>
 <para>Scrolling over a closed Match dropdown scrolls the editor without changing the match mode. Open the dropdown or use its keyboard controls to make an intentional selection.</para>
 </tip>
@@ -125,6 +127,11 @@
 <varlistentry><term>Close to tray through the optional shortcut</term><listitem>
 <para>Assign <guilabel>Close or hide window to tray</guilabel> separately in KDE Shortcuts. It hides matching windows when enabled; otherwise that shortcut closes the window normally.</para>
 <para>It does <emphasis role="bold">not intercept</emphasis> titlebar Close, <keycombo action="simul">&Alt;<keycap>F4</keycap></keycombo> or application Quit.</para>
+</listitem></varlistentry>
+<varlistentry><term>Skip automatic actions when a native tray exists</term><listitem>
+<para>Off by default. The editor warns when a matching window has an active native tray registration. Disable the application's own tray in its settings if you want Minimize2Tray to be the sole tray manager.</para>
+<para>Alternatively, enable this rule's explicit skip option. Only positively identified active native tray items suppress its automatic startup, minimize and close-to-tray actions; manual pins and other matching rules remain independent. If the native tray appears later, automatic pins owned solely by this rule are released. If it disappears, the rule may apply again.</para>
+<note><title>Live detection has limits</title><para>Detection reads the session tray registry asynchronously and matches process identity or exact application identifiers. It excludes Minimize2Tray's own registrations. Titles and substrings are not guessed. An unavailable watcher, unidentified item or registration still starting does not establish a conflict. A missing warning does not prove the application lacks a tray feature. No downloadable application list is used.</para></note>
 </listitem></varlistentry>
 <varlistentry><term>Quit on logout</term><listitem>
 <para>An explicit opt-in to send <literal>SIGTERM</literal> to a verified native Wayland application's process during logout, restart or shutdown if KDE has disabled closing its matching window.</para>
@@ -178,8 +185,14 @@
 <variablelist>
 <varlistentry><term>A window is not hidden</term><listitem><para>Use Detect and Preview to check actual properties, all checked conditions, window type and child protection. On Wayland, do not use X11-only tools as evidence for a native window.</para></listitem></varlistentry>
 <varlistentry><term>The tray icon is generic</term><listitem><para>Check the installed launcher or select a per-rule icon override. Do not add an unrelated Application ID to select an icon.</para></listitem></varlistentry>
-<varlistentry><term>More detail is needed</term><listitem><para><guilabel>Enable debug logging</guilabel> writes diagnostic messages to KWin's logs. Leave it off during normal use.</para></listitem></varlistentry>
+<varlistentry><term>More detail is needed</term><listitem><para><guilabel>Enable debug logging</guilabel> writes diagnostic messages to KWin's logs. Its suboption <guilabel>Record startup and tray timing</guilabel> records bounded, first-use durations for rule processing, icon creation and launcher metadata resolution, plus SNI creation and window removal events. Disabling debug logging also disables timing. Window titles are not included in these timing records.</para></listitem></varlistentry>
 </variablelist>
+</sect1>
+<sect1 id="tray-input-recovery"><title>Partially unclickable tray icons on Wayland</title>
+<para>Plasma draws SNI icons in its panel; an application cannot raise its individual icon above other windows or input containers. XEmbedSNIProxy forwards legacy X11 tray clicks through transparent containers. A stale input region in such a container can intercept clicks over a neighboring icon.</para>
+<para><guilabel>Recover stale XEmbed tray input (Wayland)</guilabel> is an optional workaround, off by default. While Minimize2Tray icons exist, it checks only verified, transparent proxy containers whose input region stays unchanged for at least one second. Mouse-button activity, geometry changes and normal click forwarding prevent recovery.</para>
+<para>The worker checks the X server's client PID against a same-user XEmbedSNIProxy process and rechecks the container before clearing its stale input region. It does not move windows, stop services or remove native tray registrations. A short process timeout protects KWin if the X server stalls. Builds without the optional XCB helper leave the option unavailable.</para>
+<important><title>A workaround, not an upstream repair</title><para>This cannot fix every Plasma tray-host or proxy bug. Unidentified containers are left untouched. Enable it only if you encounter this symptom and verify the result in your Wayland session. Native SNI warnings and rule handling do not depend on this option.</para></important>
 </sect1>
 <sect1 id="backups"><title>Exporting and importing configuration</title>
 <para><guibutton>View as text…</guibutton> displays read-only JSON, including pending and disabled rules. <guibutton>Export configuration…</guibutton> saves all rules, options and sorting to a JSON backup.</para>

@@ -14,6 +14,7 @@
 class QDialog;
 class QProcess;
 class SessionTermination;
+class NativeTrayMonitor;
 
 class ScriptConfig : public QObject, protected QDBusContext {
     Q_OBJECT
@@ -33,6 +34,8 @@ class ScriptConfig : public QObject, protected QDBusContext {
     Q_INVOKABLE QStringList matchingRules(const QVariantMap &window) const;
     Q_INVOKABLE void terminateSessionWindows(const QVariantList &windows);
     Q_INVOKABLE QVariantMap matchingBehavior(const QVariantMap &window) const;
+    Q_INVOKABLE void traceDiagnostic(const QString &event, const QString &window);
+    Q_INVOKABLE void setTrayCount(int count);
     Q_INVOKABLE void setWindows(const QVariantList &windows) { m_windows = windows; }
 
   public slots:
@@ -55,6 +58,11 @@ class ScriptConfig : public QObject, protected QDBusContext {
     void showDialog(QDialog *dialog, const QString &role);
     KConfig m_config;
     std::unique_ptr<SessionTermination> m_sessionTermination;
+    std::unique_ptr<NativeTrayMonitor> m_nativeTray;
+    QPointer<QProcess> m_recoveryProcess;
+    QTimer m_recoveryTimer;
+    int m_trayCount = 0;
+    void recoverTrayInput();
     QPointer<QDialog> m_aboutDialog;
     QPointer<QDialog> m_configDialog; // Launch errors only; the editor runs in kcmshell6.
     QPointer<QProcess> m_configProcess;

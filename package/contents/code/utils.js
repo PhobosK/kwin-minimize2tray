@@ -76,6 +76,7 @@ function setup(window) {
 
 function forgetWindow(window) {
     const windowId = window.internalId;
+    if (typeof scriptConfig.traceDiagnostic === "function") scriptConfig.traceDiagnostic("window disappeared", windowId.toString());
     if (pendingActivation && pendingActivation.windowId === windowId) cancelWindowActivation();
     if (windowId in trackedWindows) disconnectSignals(trackedWindows[windowId].connections);
     delete hiddenWindows[windowId]; // Never restore a closing window from a pending retry.
@@ -89,7 +90,7 @@ function forgetWindow(window) {
 function formattedWindowInfo(w) {
     let desktops;
     if (w.onAllDesktops) {
-        desktops = "All Desktops";
+        desktops = qsTranslate("Minimize2Tray", "All Desktops");
     } else {
         desktops = w.desktops.map(desktop => desktop.name).join(", ");
     }
@@ -129,6 +130,8 @@ function addTrayIcon(window, automatic = false) {
     trayItem.requestConfigure.connect(() => scriptConfig.configure());
     trayItem.requestAutomaticRule.connect(() => scriptConfig.addAutomaticRule());
     trayIcons[windowId] = trayItem;
+    ++trayIconCount;
+    if (typeof scriptConfig.setTrayCount === "function") scriptConfig.setTrayCount(trayIconCount);
     if (automatic) automaticPins[windowId] = true;
     debugLog(automatic ? "added automatic tray icon" : "added manual tray icon", windowId);
     return true;
@@ -152,6 +155,8 @@ function removeTrayIcon(window) {
     }
     const trayItem = trayIcons[windowId];
     delete trayIcons[windowId];
+    trayIconCount = Math.max(0, trayIconCount - 1);
+    if (typeof scriptConfig.setTrayCount === "function") scriptConfig.setTrayCount(trayIconCount);
     delete automaticPins[windowId];
     trayItem.destroy();
     debugLog("removed tray icon", windowId);
@@ -199,6 +204,8 @@ function restoreManagedWindows() {
         releaseHiddenWindow(window, true);
     });
     trayIcons = new Object();
+    trayIconCount = 0;
+    if (typeof scriptConfig.setTrayCount === "function") scriptConfig.setTrayCount(0);
     automaticPins = new Object();
     hiddenWindows = new Object();
     automaticDecisions = new Object();
@@ -531,6 +538,7 @@ function updateDemandsAttention(window) {
 function windowInfo(window) {
     return {
         uuid: window.internalId.toString(),
+        pid: window.pid,
         resourceClass: window.resourceClass,
         resourceName: window.resourceName,
         desktopFile: window.desktopFileName,
@@ -562,7 +570,10 @@ function reconcileWindows() {
     if (shuttingDown) return;
     const pending = pendingWindows;
     pendingWindows = new Object();
-    Object.keys(pending).forEach(windowId => {
+    const ids = Object.keys(pending);
+    ids.slice(16).forEach(id => pendingWindows[id] = true);
+    if (ids.length > 16) reconcileTimer.start();
+    ids.slice(0,16).forEach(windowId => {
         const window = getWindow(windowId);
         if (!window) return;
         const previous = automaticMatches[windowId] || {matched: false, startInTray: false};

@@ -19,7 +19,6 @@
 #include <algorithm>
 
 namespace Minimize2Tray {
-static QString text(const char *value) { return QCoreApplication::translate("Minimize2Tray", value); }
 
 QString desktopIdentity(QString value) {
     value = QFileInfo(value).fileName();
@@ -62,14 +61,16 @@ QString configLockPath() {
 QVariantMap newRule() {
     return {
         {QStringLiteral("id"), QUuid::createUuid().toString(QUuid::WithoutBraces)},
-        {QStringLiteral("title"), text("New rule")},
+        {QStringLiteral("title"), QCoreApplication::translate("Minimize2Tray", "New rule")},
         {QStringLiteral("createdAt"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},
         {QStringLiteral("description"), QString()},
         {QStringLiteral("enabled"), true},
         {QStringLiteral("autoCreated"), false},
+        {QStringLiteral("inactiveMatch"), QVariantMap()},
         {QStringLiteral("iconOverride"),
          QVariantMap{{QStringLiteral("enabled"), false}, {QStringLiteral("path"), QString()}}},
-        {QStringLiteral("behavior"), QVariantMap{{QStringLiteral("inheritStartup"), true},
+        {QStringLiteral("behavior"), QVariantMap{{QStringLiteral("skipNativeTray"), false},
+                                                 {QStringLiteral("inheritStartup"), true},
                                                  {QStringLiteral("autoPin"), false},
                                                  {QStringLiteral("startInTray"), false},
                                                  {QStringLiteral("minimizeToTray"), QStringLiteral("inherit")},
@@ -84,7 +85,7 @@ QVariantMap automaticRule(const QVariantMap &window, const QVariantMap &widerRul
                           QString &error) {
     error.clear();
     if (QUuid(window.value(QStringLiteral("uuid")).toString()).isNull()) {
-        error = text("The selected window is no longer available. Select it again.");
+        error = QCoreApplication::translate("Minimize2Tray", "The selected window is no longer available. Select it again.");
         return {};
     }
     auto rule = newRule();
@@ -95,7 +96,7 @@ QVariantMap automaticRule(const QVariantMap &window, const QVariantMap &widerRul
         auto enabled = widerRule;
         enabled[QStringLiteral("enabled")] = true;
         if (!matchFailure(enabled, window).isEmpty()) {
-            error = text("The selected window no longer matches the existing rule. Select it again.");
+            error = QCoreApplication::translate("Minimize2Tray", "The selected window no longer matches the existing rule. Select it again.");
             return {};
         }
     }
@@ -141,7 +142,7 @@ QVariantMap automaticRule(const QVariantMap &window, const QVariantMap &widerRul
     if (needsTitle || overlaps()) {
         const auto caption = window.value(QStringLiteral("caption")).toString();
         if (caption.isEmpty()) {
-            error = text("This window has no distinct role or title. Create or edit its rule manually.");
+            error = QCoreApplication::translate("Minimize2Tray", "This window has no distinct role or title. Create or edit its rule manually.");
             return {};
         }
         match[QStringLiteral("caption")] =
@@ -157,14 +158,14 @@ QVariantMap automaticRule(const QVariantMap &window, const QVariantMap &widerRul
         return {};
     }
     if (overlaps()) {
-        error = text("These windows expose identical matching properties. An automatic rule cannot safely distinguish "
+        error = QCoreApplication::translate("Minimize2Tray", "These windows expose identical matching properties. An automatic rule cannot safely distinguish "
                      "the selected window.");
         return {};
     }
     // JSON treats QStringList and lists loaded from JSON arrays consistently.
     if (!widerRule.isEmpty() && QJsonObject::fromVariantMap(match) ==
                                     QJsonObject::fromVariantMap(widerRule.value(QStringLiteral("match")).toMap())) {
-        error = text("The existing rule already uses these specific properties. Edit that rule instead.");
+        error = QCoreApplication::translate("Minimize2Tray", "The existing rule already uses these specific properties. Edit that rule instead.");
         return {};
     }
     return rule;
@@ -181,7 +182,7 @@ static QRegularExpression boundedExpression(const QString &pattern) {
 }
 
 QString encodeRules(const QVariantList &rules, bool indented) {
-    return QString::fromUtf8(QJsonDocument(QJsonObject{{QStringLiteral("schemaVersion"), 8},
+    return QString::fromUtf8(QJsonDocument(QJsonObject{{QStringLiteral("schemaVersion"), 9},
                                                        {QStringLiteral("rules"), QJsonArray::fromVariantList(rules)}})
                                  .toJson(indented ? QJsonDocument::Indented : QJsonDocument::Compact));
 }
@@ -207,28 +208,28 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
         return false;
     };
     if (json.size() > 1024 * 1024) {
-        return invalid(text("The rules exceed the 1 MiB size limit."));
+        return invalid(QCoreApplication::translate("Minimize2Tray", "The rules exceed the 1 MiB size limit."));
     }
     const auto bytes = json.toUtf8();
     if (bytes.size() > 1024 * 1024)
-        return invalid(text("The rules exceed the 1 MiB size limit."));
+        return invalid(QCoreApplication::translate("Minimize2Tray", "The rules exceed the 1 MiB size limit."));
     QJsonParseError parseError;
     const auto doc = QJsonDocument::fromJson(bytes, &parseError);
     if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
-        return invalid(text("The rules are not valid JSON: ") + parseError.errorString());
+        return invalid(QCoreApplication::translate("Minimize2Tray", "The rules are not valid JSON: ") + parseError.errorString());
     }
     const auto root = doc.object();
     const auto schema = root.value(QStringLiteral("schemaVersion"));
     if (!onlyKeys(root, {QStringLiteral("schemaVersion"), QStringLiteral("rules")}) ||
         (schema != QJsonValue(1) && schema != QJsonValue(2) && schema != QJsonValue(3) && schema != QJsonValue(4) &&
-         schema != QJsonValue(5) && schema != QJsonValue(6) && schema != QJsonValue(7) && schema != QJsonValue(8)) ||
+         schema != QJsonValue(5) && schema != QJsonValue(6) && schema != QJsonValue(7) && schema != QJsonValue(8) && schema != QJsonValue(9)) ||
         !root.value(QStringLiteral("rules")).isArray()) {
-        return invalid(text("Unsupported rule format or schema version."));
+        return invalid(QCoreApplication::translate("Minimize2Tray", "Unsupported rule format or schema version."));
     }
     const int version = schema.toInt();
     const auto array = root.value(QStringLiteral("rules")).toArray();
     if (array.size() > MaxRules) {
-        return invalid(text("There are too many rules (maximum 1024)."));
+        return invalid(QCoreApplication::translate("Minimize2Tray", "There are too many rules (maximum 1024)."));
     }
     QSet<QString> ids;
     QVariantList result;
@@ -245,6 +246,7 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
         ruleKeys.insert(QStringLiteral("behavior"));
     if (version >= 5)
         ruleKeys.insert(QStringLiteral("createdAt"));
+    if (version >= 9) ruleKeys.insert(QStringLiteral("inactiveMatch"));
     if (version >= 8)
         ruleKeys.insert(QStringLiteral("iconOverride"));
     if (version >= 7)
@@ -259,7 +261,7 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
             ids.contains(normalizedId) || !validString(rule.value(QStringLiteral("title")), 256, false) ||
             !validString(rule.value(QStringLiteral("description")), 4096) ||
             !rule.value(QStringLiteral("enabled")).isBool() || !rule.value(QStringLiteral("match")).isObject()) {
-            return invalid(text("A rule has missing, invalid or duplicate fields."));
+            return invalid(QCoreApplication::translate("Minimize2Tray", "A rule has missing, invalid or duplicate fields."));
         }
         if (version >= 5) {
             const auto created = rule.value(QStringLiteral("createdAt"));
@@ -268,10 +270,10 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
             // require a canonical UTC timestamp, so exported dates are unambiguous.
             if (!created.isNull() && (!created.isString() || !date.isValid() ||
                 created.toString().size() != 24 || date.toUTC().toString(Qt::ISODateWithMs) != created.toString()))
-                return invalid(text("A rule has an invalid creation timestamp."));
+                return invalid(QCoreApplication::translate("Minimize2Tray", "A rule has an invalid creation timestamp."));
         }
         if (version >= 7 && !rule.value(QStringLiteral("autoCreated")).isBool())
-            return invalid(text("The automatically created flag must be a boolean setting."));
+            return invalid(QCoreApplication::translate("Minimize2Tray", "The automatically created flag must be a boolean setting."));
         if (version >= 8) {
             const auto icon = rule.value(QStringLiteral("iconOverride")).toObject();
             if (!rule.value(QStringLiteral("iconOverride")).isObject() || icon.size() != 2 ||
@@ -282,7 +284,7 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
                  !validIconPath(icon.value(QStringLiteral("path")).toString())) ||
                 (icon.value(QStringLiteral("enabled")).toBool() &&
                  icon.value(QStringLiteral("path")).toString().isEmpty()))
-                return invalid(text("Choose a local desktop file or icon for the tray icon override."));
+                return invalid(QCoreApplication::translate("Minimize2Tray", "Choose a local desktop file or icon for the tray icon override."));
         }
         ids.insert(normalizedId);
         if (schema != QJsonValue(1)) {
@@ -294,13 +296,14 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
                                 QStringLiteral("minimizeToTray"), QStringLiteral("closeToTray")};
             if (version >= 4)
                 keys.insert(QStringLiteral("startupProtection"));
+            if (version >= 9) keys.insert(QStringLiteral("skipNativeTray"));
             if (version >= 8)
                 keys.insert(QStringLiteral("inheritStartup"));
             if (version >= 6)
                 keys.insert(QStringLiteral("terminateOnLogout"));
             if (!behavior.isObject() || !onlyKeys(object, keys) ||
                 !object.value(QStringLiteral("startInTray")).isBool()) {
-                return invalid(text("A rule has missing or invalid behavior settings."));
+                return invalid(QCoreApplication::translate("Minimize2Tray", "A rule has missing or invalid behavior settings."));
             }
             if (schema != QJsonValue(2) &&
                 (!object.value(QStringLiteral("autoPin")).isBool() ||
@@ -309,27 +312,29 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
                       .contains(object.value(QStringLiteral("minimizeToTray")).toString()) ||
                  (object.value(QStringLiteral("autoPin")).toBool() &&
                   object.value(QStringLiteral("startInTray")).toBool()))) {
-                return invalid(text("A rule has invalid action settings or conflicting startup actions."));
+                return invalid(QCoreApplication::translate("Minimize2Tray", "A rule has invalid action settings or conflicting startup actions."));
             }
+            if (version >= 9 && !object.value(QStringLiteral("skipNativeTray")).isBool())
+                return invalid(QCoreApplication::translate("Minimize2Tray", "Native tray conflict handling must be a boolean setting."));
             if (version >= 8 && (!object.value(QStringLiteral("inheritStartup")).isBool() ||
                                  (object.value(QStringLiteral("inheritStartup")).toBool() &&
                                   (object.value(QStringLiteral("autoPin")).toBool() ||
                                    object.value(QStringLiteral("startInTray")).toBool()))))
-                return invalid(text("The global startup choice conflicts with an explicit startup action."));
+                return invalid(QCoreApplication::translate("Minimize2Tray", "The global startup choice conflicts with an explicit startup action."));
             if (version >= 4 && (!object.value(QStringLiteral("startupProtection")).isBool() ||
                                  (object.value(QStringLiteral("startupProtection")).toBool() &&
                                   !object.value(QStringLiteral("startInTray")).toBool() &&
                                   !object.value(QStringLiteral("inheritStartup")).toBool()))) {
-                return invalid(text("Startup protection requires Start in tray and a boolean setting."));
+                return invalid(QCoreApplication::translate("Minimize2Tray", "Startup protection requires Start in tray and a boolean setting."));
             }
         }
         const auto match = rule.value(QStringLiteral("match")).toObject();
         if (version < 8 && match.contains(QStringLiteral("resourceClassComplete")))
-            return invalid(text("Whole window class requires rule schema version 8 or later."));
+            return invalid(QCoreApplication::translate("Minimize2Tray", "Whole window class requires rule schema version 8 or later."));
         const auto types = match.value(QStringLiteral("windowTypes"));
         if (!onlyKeys(match, matchKeys) || !types.isArray() || types.toArray().isEmpty() ||
             types.toArray().size() > 3 || !match.value(QStringLiteral("includeChildren")).isBool()) {
-            return invalid(text("A rule has invalid window types or child-window settings."));
+            return invalid(QCoreApplication::translate("Minimize2Tray", "A rule has invalid window types or child-window settings."));
         }
         QSet<QString> seenTypes;
         for (const auto &type : types.toArray()) {
@@ -337,7 +342,7 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
                 !QStringList{QStringLiteral("normal"), QStringLiteral("dialog"), QStringLiteral("utility")}.contains(
                     type.toString()) ||
                 seenTypes.contains(type.toString())) {
-                return invalid(text("A rule contains an unsupported or repeated window type."));
+                return invalid(QCoreApplication::translate("Minimize2Tray", "A rule contains an unsupported or repeated window type."));
             }
             seenTypes.insert(type.toString());
         }
@@ -355,28 +360,46 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
                 (!QStringList{QStringLiteral("equals"), QStringLiteral("contains"), QStringLiteral("regexp")}.contains(
                      op) ||
                  (version < 8 && op != QLatin1String("equals") && (identity || op != QLatin1String("contains"))))) {
-                return invalid(text("A matching condition has an invalid operator or value."));
+                return invalid(QCoreApplication::translate("Minimize2Tray", "A matching condition has an invalid operator or value."));
             }
             const QString pattern = condition.value(QStringLiteral("value")).toString();
             if (op == QLatin1String("regexp") && !boundedExpression(pattern).isValid())
-                return invalid(text("A regular expression is invalid or exceeds the supported complexity."));
+                return invalid(QCoreApplication::translate("Minimize2Tray", "A regular expression is invalid or exceeds the supported complexity."));
             if (identity && op == QLatin1String("equals") &&
                 (protectedIdentity(pattern) ||
                  (key != QLatin1String("legacyClass") &&
                   (pattern.contains(QLatin1Char('/')) || pattern.contains(QLatin1Char('\\')) ||
                    pattern.contains(QLatin1Char(':')))))) {
                 return invalid(
-                    text("Configuration hosts, Minimize2Tray itself and paths cannot be used as application targets."));
+                    QCoreApplication::translate("Minimize2Tray", "Configuration hosts, Minimize2Tray itself and paths cannot be used as application targets."));
             }
             hasIdentity = hasIdentity || identity;
         }
         if (!hasIdentity) {
-            return invalid(text("Select an application ID, window class or instance for each rule."));
+            return invalid(QCoreApplication::translate("Minimize2Tray", "Select an application ID, window class or instance for each rule."));
         }
         if (version >= 6 &&
             !rule.value(QStringLiteral("behavior")).toObject().value(QStringLiteral("terminateOnLogout")).isBool())
-            return invalid(text("Quit on logout must be a boolean setting."));
+            return invalid(QCoreApplication::translate("Minimize2Tray", "Quit on logout must be a boolean setting."));
+        if (version >= 9) {
+            const auto inactive = rule.value(QStringLiteral("inactiveMatch")).toObject();
+            if (!rule.value(QStringLiteral("inactiveMatch")).isObject() || !onlyKeys(inactive, conditions))
+                return invalid(QCoreApplication::translate("Minimize2Tray", "The inactive matching properties are invalid."));
+            for (auto it = inactive.begin(); it != inactive.end(); ++it) {
+                const auto condition = it.value().toObject();
+                // Inactive values never participate in matching. Validate a pattern when re-enabled.
+                if (match.contains(it.key()) || !it.value().isObject() || condition.size() != 2 ||
+                    !onlyKeys(condition, {QStringLiteral("operator"), QStringLiteral("value")}) ||
+                    !validString(condition.value(QStringLiteral("value")), 1024, false) ||
+                    !QStringList{QStringLiteral("equals"), QStringLiteral("contains"), QStringLiteral("regexp")}
+                        .contains(condition.value(QStringLiteral("operator")).toString()))
+                    return invalid(QCoreApplication::translate("Minimize2Tray", "An inactive matching property has invalid or conflicting fields."));
+            }
+        }
         auto decoded = rule.toVariantMap();
+        if (version < 9) {
+            decoded[QStringLiteral("inactiveMatch")] = QVariantMap();
+        }
         if (version < 8) {
             decoded[QStringLiteral("iconOverride")] =
                 QVariantMap{{QStringLiteral("enabled"), false}, {QStringLiteral("path"), QString()}};
@@ -404,6 +427,11 @@ bool decodeRules(const QString &json, QVariantList &rules, QString &error) {
             auto behavior = decoded.value(QStringLiteral("behavior")).toMap();
             // Preserve every existing rule's explicit startup choice.
             behavior[QStringLiteral("inheritStartup")] = false;
+            decoded[QStringLiteral("behavior")] = behavior;
+        }
+        if (version < 9) {
+            auto behavior = decoded.value(QStringLiteral("behavior")).toMap();
+            behavior[QStringLiteral("skipNativeTray")] = false;
             decoded[QStringLiteral("behavior")] = behavior;
         }
         if (version < 5)
@@ -434,14 +462,11 @@ static QVariantList legacyRules(const KConfigGroup &group, QString &error) {
         rule[QStringLiteral("behavior")] = behavior;
         const bool installedIdentity =
             !name.contains(QLatin1Char('/')) && !name.contains(QLatin1Char('\\')) && !name.contains(QLatin1Char(':'));
-        const auto service = installedIdentity ? KService::serviceByStorageId(name.endsWith(QLatin1String(".desktop"))
-                                                                                  ? name
-                                                                                  : name + QStringLiteral(".desktop"))
-                                               : KService::Ptr();
+        const auto service = installedIdentity ? installedApplication(name) : KService::Ptr();
         rule[QStringLiteral("title")] =
             (service && service->isApplication() && !service->name().isEmpty() ? service->name() : name).left(256);
         rule[QStringLiteral("description")] =
-            text("Imported from previous settings. Matches class or instance: ") + name;
+            QCoreApplication::translate("Minimize2Tray", "Imported from previous settings. Matches class or instance: ") + name;
         auto match = rule.value(QStringLiteral("match")).toMap();
         match[QStringLiteral("legacyClass")] =
             QVariantMap{{QStringLiteral("operator"), QStringLiteral("equals")}, {QStringLiteral("value"), name}};
@@ -467,7 +492,7 @@ QVariantList readRules(KConfig &config, QString &error) {
     QDir().mkpath(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation));
     QLockFile lock(configLockPath());
     if (!lock.tryLock(0)) {
-        error = text("Another Minimize2Tray window is updating the configuration. Try again.");
+        error = QCoreApplication::translate("Minimize2Tray", "Another Minimize2Tray window is updating the configuration. Try again.");
         QString legacyError;
         const auto fallback = legacyRules(group, legacyError);
         if (!legacyError.isEmpty())
@@ -484,7 +509,7 @@ QVariantList readRules(KConfig &config, QString &error) {
     if (!error.isEmpty())
         return {};
     if (group.isEntryImmutable("rules") || !config.isConfigWritable(false)) {
-        error = text("The previous settings are read-only. They remain active, but could not be migrated.");
+        error = QCoreApplication::translate("Minimize2Tray", "The previous settings are read-only. They remain active, but could not be migrated.");
         return rules;
     }
     if (!group.hasKey("legacyClassBackup")) {
@@ -493,7 +518,7 @@ QVariantList readRules(KConfig &config, QString &error) {
     group.writeEntry("rules", encodeRules(rules));
     if (!config.sync()) {
         config.markAsClean();
-        error = text("The previous settings could not be migrated. Check that kwinrc is writable.");
+        error = QCoreApplication::translate("Minimize2Tray", "The previous settings could not be migrated. Check that kwinrc is writable.");
     }
     return rules;
 }
@@ -501,6 +526,8 @@ QVariantList readRules(KConfig &config, QString &error) {
 QVariantMap readSettings(KConfig &config) {
     const KConfigGroup group(&config, ConfigGroup);
     return {{QStringLiteral("debugEnabled"), group.readEntry("debugEnabled", false)},
+            {QStringLiteral("startupDiagnostics"), group.readEntry("debugEnabled", false) && group.readEntry("startupDiagnostics", false)},
+            {QStringLiteral("recoverTrayInput"), group.readEntry("recoverTrayInput", false)},
             {QStringLiteral("countUseDot"), group.readEntry("countUseDot", false)},
             {QStringLiteral("countDisplayLimit"), std::clamp(group.readEntry("countDisplayLimit", 99), 1, 9999)},
             {QStringLiteral("hideOnMinimize"), group.readEntry("hideOnMinimize", false)},
@@ -532,28 +559,28 @@ QString windowType(const QVariantMap &window) {
 
 QString matchFailure(const QVariantMap &rule, const QVariantMap &window) {
     if (protectedWindow(window)) {
-        return text("Protected configuration or system window");
+        return QCoreApplication::translate("Minimize2Tray", "Protected configuration or system window");
     }
     if (!rule.value(QStringLiteral("enabled")).toBool()) {
-        return text("Rule disabled");
+        return QCoreApplication::translate("Minimize2Tray", "Rule disabled");
     }
     if (!window.contains(QStringLiteral("minimizable")) || !window.contains(QStringLiteral("modal")) ||
         !window.contains(QStringLiteral("specialWindow"))) {
-        return text("Refresh with Minimize2Tray enabled to verify eligibility");
+        return QCoreApplication::translate("Minimize2Tray", "Refresh with Minimize2Tray enabled to verify eligibility");
     }
     const QString type = windowType(window);
     if (!window.value(QStringLiteral("minimizable")).toBool() || window.value(QStringLiteral("modal")).toBool() ||
         window.value(QStringLiteral("specialWindow")).toBool() ||
         !QStringList{QStringLiteral("normal"), QStringLiteral("dialog"), QStringLiteral("utility")}.contains(type)) {
-        return text("Window cannot safely be minimized");
+        return QCoreApplication::translate("Minimize2Tray", "Window cannot safely be minimized");
     }
     const auto match = rule.value(QStringLiteral("match")).toMap();
     if (!match.value(QStringLiteral("windowTypes")).toStringList().contains(type)) {
-        return text("Different window type");
+        return QCoreApplication::translate("Minimize2Tray", "Different window type");
     }
     if (!match.value(QStringLiteral("includeChildren")).toBool() &&
         (window.value(QStringLiteral("hasTransientParent")).toBool() || type == QLatin1String("dialog"))) {
-        return text("Child window or dialog");
+        return QCoreApplication::translate("Minimize2Tray", "Child window or dialog");
     }
     for (auto it = match.begin(); it != match.end(); ++it) {
         if (it.key() == QLatin1String("windowTypes") || it.key() == QLatin1String("includeChildren")) {
@@ -571,7 +598,7 @@ QString matchFailure(const QVariantMap &rule, const QVariantMap &window) {
             };
             if (!matches(window.value(QStringLiteral("resourceName")).toString()) &&
                 !matches(window.value(QStringLiteral("resourceClass")).toString())) {
-                return text("Different class or instance");
+                return QCoreApplication::translate("Minimize2Tray", "Different class or instance");
             }
             continue;
         }
@@ -580,7 +607,7 @@ QString matchFailure(const QVariantMap &rule, const QVariantMap &window) {
             actual = app ? app->desktopEntryName() : desktopIdentity(actual);
             if (condition.value(QStringLiteral("operator")) == QLatin1String("equals")) {
                 wanted = desktopIdentity(wanted);
-                const auto expected = KService::serviceByStorageId(wanted + QStringLiteral(".desktop"));
+                const auto expected = installedApplication(wanted);
                 if (expected && expected->isApplication()) wanted = expected->desktopEntryName();
             }
         }
@@ -594,16 +621,16 @@ QString matchFailure(const QVariantMap &rule, const QVariantMap &window) {
                                              : actual == wanted);
         if (!matches) {
             if (it.key() == QLatin1String("desktopFile"))
-                return text("Different application");
+                return QCoreApplication::translate("Minimize2Tray", "Different application");
             if (it.key() == QLatin1String("resourceClass"))
-                return text("Different window class");
+                return QCoreApplication::translate("Minimize2Tray", "Different window class");
             if (it.key() == QLatin1String("resourceClassComplete"))
-                return text("Different whole window class");
+                return QCoreApplication::translate("Minimize2Tray", "Different whole window class");
             if (it.key() == QLatin1String("resourceName"))
-                return text("Different window instance");
+                return QCoreApplication::translate("Minimize2Tray", "Different window instance");
             if (it.key() == QLatin1String("role"))
-                return text("Different window role");
-            return text("Different window title");
+                return QCoreApplication::translate("Minimize2Tray", "Different window role");
+            return QCoreApplication::translate("Minimize2Tray", "Different window title");
         }
     }
     return {};
@@ -618,52 +645,54 @@ QString ruleSummary(const QVariantMap &rule) {
         if (!value.isEmpty()) {
             QString label;
             if (qstrcmp(key, "desktopFile") == 0)
-                label = text("App");
+                label = QCoreApplication::translate("Minimize2Tray", "App");
             else if (qstrcmp(key, "resourceClass") == 0)
-                label = text("Class");
+                label = QCoreApplication::translate("Minimize2Tray", "Class");
             else if (qstrcmp(key, "resourceClassComplete") == 0)
-                label = text("Whole class");
+                label = QCoreApplication::translate("Minimize2Tray", "Whole class");
             else if (qstrcmp(key, "resourceName") == 0)
-                label = text("Instance");
+                label = QCoreApplication::translate("Minimize2Tray", "Instance");
             else if (qstrcmp(key, "legacyClass") == 0)
-                label = text("Class or instance");
+                label = QCoreApplication::translate("Minimize2Tray", "Class or instance");
             else if (qstrcmp(key, "role") == 0)
-                label = text("Role");
+                label = QCoreApplication::translate("Minimize2Tray", "Role");
             else
-                label = text("Title");
+                label = QCoreApplication::translate("Minimize2Tray", "Title");
             parts.append(label + QStringLiteral(": ") + value);
         }
     }
     QStringList types;
     for (const auto &type : match.value(QStringLiteral("windowTypes")).toStringList()) {
-        types.append(type == QLatin1String("normal")   ? text("Normal window")
-                     : type == QLatin1String("dialog") ? text("Dialog")
-                                                       : text("Utility window"));
+        types.append(type == QLatin1String("normal")   ? QCoreApplication::translate("Minimize2Tray", "Normal window")
+                     : type == QLatin1String("dialog") ? QCoreApplication::translate("Minimize2Tray", "Dialog")
+                                                       : QCoreApplication::translate("Minimize2Tray", "Utility window"));
     }
     parts.append(types.join(QStringLiteral(", ")));
     if (!match.value(QStringLiteral("includeChildren")).toBool()) {
-        parts.append(text("No child windows"));
+        parts.append(QCoreApplication::translate("Minimize2Tray", "No child windows"));
     }
     const auto behavior = rule.value(QStringLiteral("behavior")).toMap();
-    parts.append(behavior.value(QStringLiteral("inheritStartup")).toBool() ? text("Use global startup")
-                 : behavior.value(QStringLiteral("startInTray")).toBool()  ? text("Start in tray")
-                 : behavior.value(QStringLiteral("autoPin")).toBool()      ? text("Pin without initially hiding")
-                                                                           : text("No startup action"));
+    parts.append(behavior.value(QStringLiteral("inheritStartup")).toBool() ? QCoreApplication::translate("Minimize2Tray", "Use global startup")
+                 : behavior.value(QStringLiteral("startInTray")).toBool()  ? QCoreApplication::translate("Minimize2Tray", "Start in tray")
+                 : behavior.value(QStringLiteral("autoPin")).toBool()      ? QCoreApplication::translate("Minimize2Tray", "Pin without initially hiding")
+                                                                           : QCoreApplication::translate("Minimize2Tray", "No startup action"));
     if (behavior.value(QStringLiteral("startupProtection")).toBool())
-        parts.append(text("Retry early startup restoration once"));
+        parts.append(QCoreApplication::translate("Minimize2Tray", "Retry early startup restoration once"));
     const QString minimize = behavior.value(QStringLiteral("minimizeToTray")).toString();
-    parts.append(minimize == QLatin1String("enabled") ? text("Minimize to tray: on")
-                 : minimize == QLatin1String("disabled") ? text("Minimize to tray: off")
-                                                       : text("Minimize to tray: use global setting"));
-    parts.append(behavior.value(QStringLiteral("closeToTray")).toBool() ? text("Close to tray: optional shortcut")
-                                                                      : text("Close to tray: off"));
+    parts.append(minimize == QLatin1String("enabled") ? QCoreApplication::translate("Minimize2Tray", "Minimize to tray: on")
+                 : minimize == QLatin1String("disabled") ? QCoreApplication::translate("Minimize2Tray", "Minimize to tray: off")
+                                                       : QCoreApplication::translate("Minimize2Tray", "Minimize to tray: use global setting"));
+    parts.append(behavior.value(QStringLiteral("closeToTray")).toBool() ? QCoreApplication::translate("Minimize2Tray", "Close to tray: optional shortcut")
+                                                                      : QCoreApplication::translate("Minimize2Tray", "Close to tray: off"));
+    if (behavior.value(QStringLiteral("skipNativeTray")).toBool())
+        parts.append(QCoreApplication::translate("Minimize2Tray", "Skip while a native tray is active"));
     if (behavior.value(QStringLiteral("terminateOnLogout")).toBool())
-        parts.append(text("Quit on logout when closing is disabled"));
+        parts.append(QCoreApplication::translate("Minimize2Tray", "Quit on logout when closing is disabled"));
     return parts.join(QStringLiteral(" · "));
 }
 
 QString searchText(const QVariantMap &rule) {
-    return (rule.value(QStringLiteral("autoCreated")).toBool() ? text("Auto-created") + QLatin1Char('\n') : QString()) +
+    return (rule.value(QStringLiteral("autoCreated")).toBool() ? QCoreApplication::translate("Minimize2Tray", "Auto-created") + QLatin1Char('\n') : QString()) +
            rule.value(QStringLiteral("title")).toString() + QLatin1Char('\n') +
            rule.value(QStringLiteral("description")).toString() + QLatin1Char('\n') + ruleSummary(rule);
 }

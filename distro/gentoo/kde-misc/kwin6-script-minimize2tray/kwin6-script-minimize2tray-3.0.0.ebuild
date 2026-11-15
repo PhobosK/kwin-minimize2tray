@@ -26,6 +26,9 @@ RDEPEND="
 		>=kde-plasma/plasma-workspace-6.0:6
 		>=dev-qt/qtbase-6.6:6[dbus,gui,widgets]
 		>=dev-qt/qtdeclarative-6.6:6
+		>=kde-frameworks/ki18n-6.0:6
+		>=kde-frameworks/kcolorscheme-6.0:6
+		x11-libs/libxcb
 		>=kde-frameworks/kconfig-6.0:6
 		>=kde-frameworks/kcoreaddons-6.0:6
 		>=kde-frameworks/kcmutils-6.0:6
@@ -46,7 +49,7 @@ DEPEND="${RDEPEND}
 	)
 "
 BDEPEND="
-	native-plugin? ( >=kde-frameworks/kdoctools-6.0:6 )
+	native-plugin? ( >=kde-frameworks/kdoctools-6.0:6 >=dev-qt/qttools-6.6:6[linguist] virtual/pkgconfig )
 	>=kde-frameworks/extra-cmake-modules-6.0
 	session-termination? ( virtual/pkgconfig )
 "

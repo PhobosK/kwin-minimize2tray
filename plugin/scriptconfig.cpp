@@ -1,5 +1,9 @@
 #include "scriptconfig.h"
 #include "rules.h"
+#include "translation.h"
+#include "applicationidentity.h"
+#include "diagnostics.h"
+#include "nativetray.h"
 #include "sessionprocess.h"
 #include "sessiontermination.h"
 #include <KSycoca>
@@ -12,6 +16,8 @@
 #include <QGuiApplication>
 #include <QJsonObject>
 #include <QPluginLoader>
+#include <QFileInfo>
+#include <QDir>
 #include <QDBusConnection>
 #include <QDBusMessage>
 #include <QDBusPendingCallWatcher>
@@ -26,7 +32,11 @@
 #include <algorithm>
 
 ScriptConfig::ScriptConfig(QObject *parent) : QObject(parent), m_config(QStringLiteral("kwinrc")) {
+    Minimize2Tray::loadTranslations();
     m_elapsed.start();
+    m_recoveryTimer.setInterval(5000);
+    connect(&m_recoveryTimer, &QTimer::timeout, this, &ScriptConfig::recoverTrayInput);
+    connect(Minimize2Tray::applicationIndexNotifier(), SIGNAL(changed()), this, SIGNAL(valuesChanged()));
     m_detectionTimer.setSingleShot(true);
     m_detectionTimer.setInterval(150000);
     connect(&m_detectionTimer, &QTimer::timeout, this, &ScriptConfig::finishWindowDetection);
@@ -56,6 +66,7 @@ ScriptConfig::ScriptConfig(QObject *parent) : QObject(parent), m_config(QStringL
 
 ScriptConfig::~ScriptConfig() {
     finishWindowDetection();
+    if (m_recoveryProcess) m_recoveryProcess->kill();
     // QProcess belongs to the application until it exits: never wait for a child
     // process on KWin's event loop, and never terminate an independently opened host.
     if (m_configProcess)
@@ -72,6 +83,8 @@ void ScriptConfig::reload() {
     auto rules = m_values.value(QStringLiteral("rules")).toList();
     QString error = m_error;
     const KConfigGroup group(&m_config, Minimize2Tray::ConfigGroup);
+    Minimize2Tray::setStartupTiming(group.readEntry("debugEnabled", false) && group.readEntry("startupDiagnostics", false));
+    Minimize2Tray::StartupSpan timing("initial configuration load");
     // Geometry and other KWin settings share this file. Decode rules only when
     // their document changed; preserve the last valid rules on malformed edits.
     if (!m_hasRulesSource || !group.hasKey("rules") ||
@@ -105,6 +118,23 @@ void ScriptConfig::reload() {
         m_rulesSource = group.readEntry("rules", QString());
     }
     auto values = Minimize2Tray::readSettings(m_config);
+    Minimize2Tray::setStartupTiming(values.value(QStringLiteral("startupDiagnostics")).toBool());
+    const bool recoverInput = MINIMIZE2TRAY_HAS_TRAY_RECOVERY && values.value(QStringLiteral("recoverTrayInput")).toBool();
+    const bool observeNative = recoverInput ||
+        std::any_of(rules.cbegin(), rules.cend(), [](const auto &entry) {
+            const auto rule = entry.toMap();
+            return rule.value(QStringLiteral("enabled")).toBool() &&
+                rule.value(QStringLiteral("behavior")).toMap().value(QStringLiteral("skipNativeTray")).toBool();
+        });
+    if (observeNative && !m_nativeTray) {
+        m_nativeTray = std::make_unique<NativeTrayMonitor>(this);
+        connect(m_nativeTray.get(), &NativeTrayMonitor::changed, this, &ScriptConfig::valuesChanged);
+    } else if (!observeNative) m_nativeTray.reset();
+    if (recoverInput && m_trayCount > 0) m_recoveryTimer.start();
+    else {
+        m_recoveryTimer.stop();
+        if (m_recoveryProcess) m_recoveryProcess->kill();
+    }
     values.insert(QStringLiteral("rules"), rules);
     if (error != m_error) {
         m_error = error;
@@ -162,7 +192,9 @@ QStringList ScriptConfig::matchingRules(const QVariantMap &window) const {
 }
 
 QVariantMap ScriptConfig::matchingBehavior(const QVariantMap &window) const {
+    Minimize2Tray::StartupSpan timing("initial rule processing", window.value(QStringLiteral("uuid")).toString());
     bool matched = false;
+    bool effectiveMatch = false;
     bool autoPin = false;
     bool startInTray = false;
     bool startupProtection = false;
@@ -176,6 +208,8 @@ QVariantMap ScriptConfig::matchingBehavior(const QVariantMap &window) const {
             continue;
         matched = true;
         const auto behavior = rule.value(QStringLiteral("behavior")).toMap();
+        if (behavior.value(QStringLiteral("skipNativeTray")).toBool() && m_nativeTray && m_nativeTray->hasNativeTray(window)) continue;
+        effectiveMatch = true;
         const bool inherit = behavior.value(QStringLiteral("inheritStartup")).toBool();
         const auto global = m_values.value(QStringLiteral("startupAction")).toString();
         autoPin =
@@ -195,7 +229,7 @@ QVariantMap ScriptConfig::matchingBehavior(const QVariantMap &window) const {
     }
     // Explicit enable wins across matching rules; explicit disable overrides inherited defaults.
     const bool minimizeToTray = minimizeEnabled ||
-        (!minimizeDisabled && m_values.value(QStringLiteral("hideOnMinimize")).toBool());
+        (!minimizeDisabled && (!matched || effectiveMatch) && m_values.value(QStringLiteral("hideOnMinimize")).toBool());
     return {{QStringLiteral("matched"), matched},
             {QStringLiteral("autoPin"), autoPin},
             {QStringLiteral("startInTray"), startInTray},
@@ -234,6 +268,41 @@ void ScriptConfig::finishWindowDetection() {
 QVariantList ScriptConfig::windows() {
     Q_EMIT windowsRequested();
     return m_windows;
+}
+
+void ScriptConfig::traceDiagnostic(const QString &event, const QString &window) {
+    Minimize2Tray::startupEvent(qPrintable(event), window);
+}
+void ScriptConfig::setTrayCount(int count) {
+    m_trayCount = std::max(0, count);
+    if (MINIMIZE2TRAY_HAS_TRAY_RECOVERY && m_trayCount && m_values.value(QStringLiteral("recoverTrayInput")).toBool()) {
+        if (!m_recoveryTimer.isActive()) m_recoveryTimer.start();
+    } else {
+        m_recoveryTimer.stop();
+        if (m_recoveryProcess) m_recoveryProcess->kill();
+    }
+}
+void ScriptConfig::recoverTrayInput() {
+    if (!MINIMIZE2TRAY_HAS_TRAY_RECOVERY || !m_trayCount || !m_nativeTray || m_recoveryProcess || qEnvironmentVariable("XDG_SESSION_TYPE") != QLatin1String("wayland")) return;
+    const auto pids = m_nativeTray->proxyPids();
+    if (pids.isEmpty()) return;
+    const auto adapter = sessionProcessPluginPath();
+    if (adapter.isEmpty()) return; // Never search the working directory or PATH.
+    const auto executable = QFileInfo(adapter).dir().filePath(QStringLiteral("minimize2tray-tray-recovery"));
+    const QFileInfo helper(executable);
+    if (!helper.isFile() || !helper.isExecutable()) return;
+    auto process = new QProcess(QCoreApplication::instance());
+    m_recoveryProcess = process;
+    process->setProcessChannelMode(QProcess::ForwardedErrorChannel);
+    connect(process, &QProcess::finished, process, &QObject::deleteLater);
+    connect(process, &QProcess::errorOccurred, process, &QObject::deleteLater);
+    // A stalled X server must never stall the compositor or leave a worker running.
+    QTimer::singleShot(4000, process, [process]() { if (process->state() != QProcess::NotRunning) process->kill(); });
+    connect(process, &QProcess::finished, this, [this, process]() {
+        const auto output = process->readAllStandardOutput();
+        if (!output.isEmpty() && m_values.value(QStringLiteral("debugEnabled")).toBool()) qInfo().noquote() << output.trimmed();
+    });
+    process->start(executable, pids.mid(0,32));
 }
 
 void ScriptConfig::showDialog(QDialog *dialog, const QString &role) {

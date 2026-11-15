@@ -12,7 +12,6 @@
 #include <cmath>
 
 namespace Minimize2Tray {
-static QString text(const char *value) { return QCoreApplication::translate("Minimize2Tray", value); }
 
 bool mergeConfigurationRules(const QVariantList &current, const QVariantList &incoming, QVariantList &merged,
                              QString &error) {
@@ -38,7 +37,7 @@ bool mergeConfigurationRules(const QVariantList &current, const QVariantList &in
         if (contents.contains(key))
             continue;
         if (result.size() >= MaxRules) {
-            error = text("Adding these rules would exceed the maximum of 1024 rules. Choose fewer rules or replace the "
+            error = QCoreApplication::translate("Minimize2Tray", "Adding these rules would exceed the maximum of 1024 rules. Choose fewer rules or replace the "
                          "current rules.");
             return false;
         }
@@ -61,17 +60,17 @@ bool mergeConfigurationRules(const QVariantList &current, const QVariantList &in
 bool decodeConfigurationBackup(const QByteArray &json, ConfigurationBackup &backup, QString &error) {
     error.clear();
     if (json.size() > MaxConfigurationBackupBytes) {
-        error = text("The configuration backup exceeds the 8 MiB size limit.");
+        error = QCoreApplication::translate("Minimize2Tray", "The configuration backup exceeds the 8 MiB size limit.");
         return false;
     }
     QJsonParseError parseError;
     const auto doc = QJsonDocument::fromJson(json, &parseError);
     if (parseError.error != QJsonParseError::NoError) {
-        error = text("The configuration backup is not valid JSON: ") + parseError.errorString();
+        error = QCoreApplication::translate("Minimize2Tray", "The configuration backup is not valid JSON: ") + parseError.errorString();
         return false;
     }
     if (!doc.isObject()) {
-        error = text("The configuration backup must be a JSON object.");
+        error = QCoreApplication::translate("Minimize2Tray", "The configuration backup must be a JSON object.");
         return false;
     }
     const auto root = doc.object();
@@ -80,21 +79,31 @@ bool decodeConfigurationBackup(const QByteArray &json, ConfigurationBackup &back
         !root.value(QStringLiteral("rules")).isObject() || !root.value(QStringLiteral("settings")).isObject() ||
         !QStringList{QStringLiteral("title"), QStringLiteral("newest"), QStringLiteral("oldest")}.contains(
             root.value(QStringLiteral("sortOrder")).toString())) {
-        error = text("Unsupported Minimize2Tray configuration backup format or version.");
+        error = QCoreApplication::translate("Minimize2Tray", "Unsupported Minimize2Tray configuration backup format or version.");
         return false;
     }
     const auto settings = root.value(QStringLiteral("settings")).toObject();
     const auto limit = settings.value(QStringLiteral("countDisplayLimit"));
-    if ((!settings.contains(QStringLiteral("startupAction")) && settings.size() != 4) ||
+    const QSet<QString> allowedSettings{QStringLiteral("startupAction"), QStringLiteral("countUseDot"),
+        QStringLiteral("countDisplayLimit"), QStringLiteral("hideOnMinimize"), QStringLiteral("debugEnabled"),
+        QStringLiteral("startupDiagnostics"), QStringLiteral("recoverTrayInput")};
+    for (auto it = settings.begin(); it != settings.end(); ++it) {
+        if (!allowedSettings.contains(it.key())) {
+            error = QCoreApplication::translate("Minimize2Tray", "The configuration backup contains an unknown option.");
+            return false;
+        }
+    }
+    if ((settings.contains(QStringLiteral("startupDiagnostics")) && !settings.value(QStringLiteral("startupDiagnostics")).isBool()) ||
+        (settings.contains(QStringLiteral("recoverTrayInput")) && !settings.value(QStringLiteral("recoverTrayInput")).isBool()) ||
+        (settings.value(QStringLiteral("startupDiagnostics")).toBool() && !settings.value(QStringLiteral("debugEnabled")).toBool()) ||
         (settings.contains(QStringLiteral("startupAction")) &&
-         (settings.size() != 5 ||
-          !QStringList{QStringLiteral("none"), QStringLiteral("pin"), QStringLiteral("hide")}.contains(
+         (!QStringList{QStringLiteral("none"), QStringLiteral("pin"), QStringLiteral("hide")}.contains(
               settings.value(QStringLiteral("startupAction")).toString()))) ||
         !settings.value(QStringLiteral("countUseDot")).isBool() ||
         !settings.value(QStringLiteral("hideOnMinimize")).isBool() ||
         !settings.value(QStringLiteral("debugEnabled")).isBool() || !limit.isDouble() || limit.toDouble() < 1 ||
         limit.toDouble() > 9999 || std::floor(limit.toDouble()) != limit.toDouble()) {
-        error = text("The configuration backup has missing, unknown or invalid options.");
+        error = QCoreApplication::translate("Minimize2Tray", "The configuration backup has missing, unknown or invalid options.");
         return false;
     }
     ConfigurationBackup result;
@@ -105,6 +114,8 @@ bool decodeConfigurationBackup(const QByteArray &json, ConfigurationBackup &back
     result.settings = settings.toVariantMap();
     if (!result.settings.contains(QStringLiteral("startupAction")))
         result.settings[QStringLiteral("startupAction")] = QStringLiteral("hide");
+    if (!result.settings.contains(QStringLiteral("startupDiagnostics"))) result.settings[QStringLiteral("startupDiagnostics")] = false;
+    if (!result.settings.contains(QStringLiteral("recoverTrayInput"))) result.settings[QStringLiteral("recoverTrayInput")] = false;
     result.sortOrder = root.value(QStringLiteral("sortOrder")).toString();
     backup = result; // Leave the caller's state untouched on any failure.
     return true;
@@ -125,18 +136,18 @@ QByteArray encodeConfigurationBackup(const ConfigurationBackup &backup, QString 
 bool readConfigurationBackup(const QString &path, ConfigurationBackup &backup, QString &error) {
     error.clear();
     if (!QFileInfo(path).isFile()) {
-        error = text("Select a regular configuration backup file.");
+        error = QCoreApplication::translate("Minimize2Tray", "Select a regular configuration backup file.");
         return false;
     }
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) {
-        error = text("Could not open the configuration backup: ") + file.errorString();
+        error = QCoreApplication::translate("Minimize2Tray", "Could not open the configuration backup: ") + file.errorString();
         return false;
     }
     // Bound the read even if the file grows after selection.
     const auto bytes = file.read(MaxConfigurationBackupBytes + 1);
     if (file.error() != QFileDevice::NoError) {
-        error = text("Could not read the configuration backup: ") + file.errorString();
+        error = QCoreApplication::translate("Minimize2Tray", "Could not read the configuration backup: ") + file.errorString();
         return false;
     }
     return decodeConfigurationBackup(bytes, backup, error);
@@ -149,7 +160,7 @@ bool writeConfigurationBackup(const QString &path, const QByteArray &json, QStri
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly) || !file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner) ||
         file.write(json) != json.size() || !file.commit()) {
-        error = text("Could not export the configuration: ") + file.errorString();
+        error = QCoreApplication::translate("Minimize2Tray", "Could not export the configuration: ") + file.errorString();
         return false;
     }
     return true;

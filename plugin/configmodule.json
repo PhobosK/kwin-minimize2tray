@@ -7,7 +7,21 @@
         "License": "GPL",
         "Website": "https://github.com/PhobosK/kwin-minimize2tray",
         "BugReportUrl": "https://github.com/PhobosK/kwin-minimize2tray/issues",
-        "Authors": [{"Name": "Luis Bocanegra", "Email": "luisbocanegra17b@gmail.com", "Website": "https://github.com/luisbocanegra"}],
-        "OtherContributors": [{"Name": "PhobosK", "Task": "Fork development and improvements"}]
+        "Authors": [
+            {
+                "Name": "Luis Bocanegra",
+                "Email": "luisbocanegra17b@gmail.com",
+                "Website": "https://github.com/luisbocanegra"
+            }
+        ],
+        "OtherContributors": [
+            {
+                "Name": "PhobosK",
+                "Task": "Fork development and improvements",
+                "Task[bg]": "Разработка и подобрения на разклонението"
+            }
+        ],
+        "Name[bg]": "Минимизиране в системната област",
+        "Description[bg]": "Настройване на правила за прозорци и икони в системната област"
     }
 }
