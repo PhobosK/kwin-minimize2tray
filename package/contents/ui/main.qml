@@ -5,6 +5,7 @@ import "../code/utils.js" as Utils
 
 Item {
     id: root
+    property var appliedBehavior: null
     property bool debugEnabled: false
     property bool countUseDot: false
     property int countDisplayLimit: 99
@@ -34,7 +35,7 @@ Item {
 
     ScriptConfig {
         id: scriptConfig
-        onValuesChanged: root.reloadConfig()
+        onValuesChanged: root.reloadConfig(typeof scriptConfig.reconciliationRequested === "undefined")
         onWindowsRequested: scriptConfig.setWindows(Workspace.windows.map(window => Utils.windowInfo(window)))
         onAutomaticRuleCreated: windowId => Utils.applyAutomaticRule(windowId)
     }
@@ -46,20 +47,24 @@ Item {
         function onWindowDetectionChanged(active) {
             Utils.setDetectionHostsHidden(active);
         }
+        function onReconciliationRequested() { root.reloadConfig(true); }
         function onSessionClosing() {
             if (typeof scriptConfig.terminateSessionWindows === "function")
                 scriptConfig.terminateSessionWindows(Workspace.windows);
         }
     }
 
-    function reloadConfig() {
-        Utils.cancelAllStartupProtection();
-        Utils.cancelWindowActivation();
+    function reloadConfig(forceReconcile = false) {
         const config = scriptConfig.values;
         debugEnabled = config.debugEnabled;
         countUseDot = config.countUseDot;
         countDisplayLimit = config.countDisplayLimit;
         hideOnMinimize = config.hideOnMinimize;
+        const behavior = JSON.stringify([config.rules, config.hideOnMinimize, config.startupAction]);
+        if (!forceReconcile && appliedBehavior === behavior) return;
+        appliedBehavior = behavior;
+        Utils.cancelAllStartupProtection();
+        Utils.cancelWindowActivation();
         Workspace.windows.forEach(window => {
             Utils.updateWindowIcon(window);
             Utils.scheduleWindow(window);

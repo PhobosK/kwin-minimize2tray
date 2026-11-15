@@ -20,6 +20,29 @@
 
 namespace Minimize2Tray {
 
+QVariantMap windowProperties(QObject *window) {
+    if (!window)
+        return {};
+    const auto type = window->property("normalWindow").toBool() ? QStringLiteral("normal")
+                      : window->property("dialog").toBool()     ? QStringLiteral("dialog")
+                      : window->property("utility").toBool()    ? QStringLiteral("utility")
+                                                                : QStringLiteral("other");
+    return {{QStringLiteral("uuid"), window->property("internalId")},
+            {QStringLiteral("pid"), window->property("pid")},
+            {QStringLiteral("desktopFile"), window->property("desktopFileName")},
+            {QStringLiteral("resourceClass"), window->property("resourceClass")},
+            {QStringLiteral("resourceName"), window->property("resourceName")},
+            {QStringLiteral("role"), window->property("windowRole")},
+            {QStringLiteral("caption"), window->property("caption")},
+            {QStringLiteral("type"), type},
+            {QStringLiteral("hasTransientParent"), window->property("transient")},
+            {QStringLiteral("modal"), window->property("modal")},
+            {QStringLiteral("specialWindow"), window->property("specialWindow").toBool() ||
+                                                  window->property("appletPopup").toBool() ||
+                                                  window->property("splash").toBool()},
+            {QStringLiteral("minimizable"), window->property("minimizable")}};
+}
+
 QString desktopIdentity(QString value) {
     value = QFileInfo(value).fileName();
     if (value.endsWith(QLatin1String(".desktop"))) {

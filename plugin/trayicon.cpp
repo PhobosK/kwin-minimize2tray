@@ -124,6 +124,26 @@ class LauncherAPI : public QObject {
         if (entry != m_entries.end() && --entry->references == 0 && entry->sender.isEmpty()) {
             m_entries.erase(entry);
         }
+        pruneUnused();
+    }
+
+    void pruneUnused() {
+        if (m_entries.size() <= 256)
+            return;
+        QStringList senders;
+        for (auto it = m_entries.begin(); it != m_entries.end() && m_entries.size() > 256;) {
+            if (!it->references) {
+                senders.append(it->sender);
+                it = m_entries.erase(it);
+            } else
+                ++it;
+        }
+        for (const auto &sender : senders) {
+            const bool used = std::any_of(m_entries.cbegin(), m_entries.cend(),
+                                          [&](const auto &item) { return item.sender == sender; });
+            if (!used)
+                m_watcher.removeWatchedService(sender);
+        }
     }
 
     QVariantMap properties(const QString &url) const { return m_entries.value(url).properties; }
@@ -334,7 +354,8 @@ void TrayIcon::setProgress(int progress) {
     int boundedProgress = std::clamp(progress, 0, 100);
 
     if (progress != boundedProgress) {
-        qDebug() << qUtf8Printable(m_launcherUrl) << ": Progress value " << progress << " is out of bounds!";
+        Minimize2Tray::log(QtDebugMsg, "TrayIcon", "progress", "clamped", m_windowId.toString(), 0,
+                           QString::number(progress));
     }
 
     if (m_progress != boundedProgress) {
@@ -430,7 +451,9 @@ void TrayIcon::initializeTrayIcon() {
     connect(aboutAction, &QAction::triggered, this, &TrayIcon::requestAbout, Qt::QueuedConnection);
     m_menu->addSeparator();
     auto quitAction = m_menu->addAction(QIcon::fromTheme(QStringLiteral("application-exit")), tr("Quit"));
-    quitAction->setToolTip(tr("Close this window. Other windows of the application may remain open."));
+    quitAction->setToolTip(tr(
+        "Request closing this window. Native Wayland windows use the matching KWin adapter when KDE disables closing. "
+        "This does not kill the application process or change KDE rules; the application may ignore the request."));
     connect(quitAction, &QAction::triggered, this, [this]() { emit requestClose(m_windowId); }, Qt::QueuedConnection);
 
 #if KSTATUSNOTIFIERITEM_VERSION >= QT_VERSION_CHECK(6, 5, 0)

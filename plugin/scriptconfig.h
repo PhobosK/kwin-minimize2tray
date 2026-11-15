@@ -13,6 +13,8 @@
 
 class QDialog;
 class QProcess;
+class QPluginLoader;
+class SessionProcess;
 class SessionTermination;
 class NativeTrayMonitor;
 
@@ -27,6 +29,8 @@ class ScriptConfig : public QObject, protected QDBusContext {
     QVariantMap values() const { return m_values; }
     // Monotonic deadlines for bounded startup protection, unaffected by wall-clock changes.
     Q_INVOKABLE qint64 monotonicMilliseconds() const { return m_elapsed.elapsed(); }
+    Q_INVOKABLE bool requestWindowClose(QObject *window);
+    Q_INVOKABLE void logDiagnostic(const QString &operation, const QString &window = {});
     Q_INVOKABLE void showAbout();
     Q_INVOKABLE void configure();
     Q_INVOKABLE void addAutomaticRule();
@@ -47,12 +51,15 @@ class ScriptConfig : public QObject, protected QDBusContext {
   signals:
     void sessionClosing();
     void valuesChanged();
+    void reconciliationRequested();
     void windowsRequested();
     void windowDetectionChanged(bool active);
     void automaticRuleCreated(const QString &windowId);
 
   private:
     void reload();
+    SessionProcess *loadProcessAdapter(QString &error);
+    std::unique_ptr<QPluginLoader> m_processAdapter;
     void finishWindowDetection();
     void openConfiguration(bool automaticRule);
     void showDialog(QDialog *dialog, const QString &role);
@@ -62,6 +69,7 @@ class ScriptConfig : public QObject, protected QDBusContext {
     QPointer<QProcess> m_recoveryProcess;
     QTimer m_recoveryTimer;
     int m_trayCount = 0;
+    QString m_recoveryError;
     void recoverTrayInput();
     QPointer<QDialog> m_aboutDialog;
     QPointer<QDialog> m_configDialog; // Launch errors only; the editor runs in kcmshell6.

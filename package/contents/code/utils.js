@@ -1,5 +1,8 @@
 function debugLog(message, windowId = "") {
-    if (debugEnabled) console.debug("Minimize2Tray:", message, windowId);
+    if (!debugEnabled) return;
+    if (typeof scriptConfig.logDiagnostic === "function") scriptConfig.logDiagnostic(message, windowId.toString());
+    else console.debug(JSON.stringify({timestamp: new Date().toISOString(), component: "WindowLifecycle",
+        operation: "action", outcome: "observed", window: windowId.toString(), detail: message}));
 }
 
 function isValidWindow(window) {
@@ -501,7 +504,8 @@ function closeWindow(windowId) {
 
     if (pendingActivation && pendingActivation.windowId === windowId) cancelWindowActivation();
     cancelStartupProtection(windowId);
-    window.closeWindow();
+    if (typeof scriptConfig.requestWindowClose === "function") scriptConfig.requestWindowClose(window);
+    else window.closeWindow();
 }
 
 function unpinIcon(windowId) {
@@ -589,7 +593,7 @@ function reconcileWindows() {
         }
         if (debugEnabled && (behavior.matched || previous.matched || windowId in trayIcons) &&
             JSON.stringify(previous) !== JSON.stringify(behavior)) {
-            debugLog("rule behavior changed: " + JSON.stringify(behavior), windowId);
+            debugLog("rule behavior changed", windowId);
         }
         let hidden = hiddenWindows[windowId];
         if (!behavior.matched) {

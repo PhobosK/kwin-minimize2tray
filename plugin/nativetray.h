@@ -42,5 +42,5 @@ class NativeTrayMonitor : public QObject {
     quint64 m_generation = 0;
     uint m_kwinPid = 0;
     int m_pending = 0;
-    bool m_busy = false, m_again = false, m_available = false;
+    bool m_busy = false, m_again = false, m_available = false, m_warnedUnavailable = false;
 };

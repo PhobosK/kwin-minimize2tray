@@ -1,6 +1,11 @@
 #include "sessiontermination.h"
+#include "logging.h"
 #include "rules.h"
 #include "sessionprocess.h"
+#include <QUuid>
+#include <algorithm>
+#include <cerrno>
+#include <cstring>
 
 #include <QDBusConnection>
 #include <QDebug>
@@ -22,23 +27,6 @@
 namespace {
 const char libraryAnchor = 0;
 
-QVariantMap windowInfo(QObject *window) {
-    const auto type = window->property("normalWindow").toBool() ? QStringLiteral("normal")
-                      : window->property("dialog").toBool()     ? QStringLiteral("dialog")
-                      : window->property("utility").toBool()    ? QStringLiteral("utility")
-                                                                : QStringLiteral("other");
-    return {{QStringLiteral("desktopFile"), window->property("desktopFileName")},
-            {QStringLiteral("resourceClass"), window->property("resourceClass")},
-            {QStringLiteral("resourceName"), window->property("resourceName")},
-            {QStringLiteral("role"), window->property("windowRole")},
-            {QStringLiteral("caption"), window->property("caption")},
-            {QStringLiteral("type"), type},
-            {QStringLiteral("hasTransientParent"), window->property("transient")},
-            {QStringLiteral("modal"), window->property("modal")},
-            {QStringLiteral("specialWindow"), window->property("specialWindow")},
-            {QStringLiteral("minimizable"), window->property("minimizable")}};
-}
-
 struct ProcessHandle {
     int fd;
     explicit ProcessHandle(int descriptor) : fd(descriptor) {}
@@ -52,17 +40,26 @@ struct ProcessHandle {
 
 // Kernel process credentials and pidfs inode identity are available together on
 // Linux 6.13+. A missing ioctl or permission fails closed, without a PID fallback.
-bool processIdentity(int descriptor, QByteArray &identity, qint64 &pid) {
+bool processIdentity(int descriptor, QByteArray &identity, qint64 &pid, QString *error = nullptr) {
+    const auto fail = [error](const QString &detail) {
+        if (error)
+            *error = detail;
+        return false;
+    };
 #if defined(PIDFD_GET_INFO) && defined(SYS_pidfd_send_signal)
     struct pidfd_info info{};
     info.mask = PIDFD_INFO_PID | PIDFD_INFO_CREDS | PIDFD_INFO_EXIT;
     struct stat status{};
-    if (descriptor < 0 || ioctl(descriptor, PIDFD_GET_INFO, &info) != 0 ||
-        (info.mask & (PIDFD_INFO_PID | PIDFD_INFO_CREDS)) != (PIDFD_INFO_PID | PIDFD_INFO_CREDS) ||
+    if (descriptor < 0)
+        return fail(QStringLiteral("open peer pidfd: %1").arg(QString::fromLocal8Bit(strerror(errno))));
+    if (ioctl(descriptor, PIDFD_GET_INFO, &info) != 0)
+        return fail(QStringLiteral("PIDFD_GET_INFO: %1").arg(QString::fromLocal8Bit(strerror(errno))));
+    if ((info.mask & (PIDFD_INFO_PID | PIDFD_INFO_CREDS)) != (PIDFD_INFO_PID | PIDFD_INFO_CREDS) ||
         (info.mask & PIDFD_INFO_EXIT) || info.pid <= 1 || info.pid != info.tgid || info.pid == uint(getpid()) ||
-        info.pid == uint(getppid()) || info.ruid != geteuid() || info.euid != geteuid() || info.suid != geteuid() ||
-        fstat(descriptor, &status) != 0 || status.st_ino == 0)
-        return false;
+        info.pid == uint(getppid()) || info.ruid != geteuid() || info.euid != geteuid() || info.suid != geteuid())
+        return fail(QStringLiteral("Peer is exited, protected, or has unverifiable process credentials"));
+    if (fstat(descriptor, &status) != 0 || status.st_ino == 0)
+        return fail(QStringLiteral("pidfd identity: %1").arg(QString::fromLocal8Bit(strerror(errno))));
     pid = info.pid;
     identity = QByteArray::number(qulonglong(status.st_dev)) + ':' + QByteArray::number(qulonglong(status.st_ino));
     return true;
@@ -70,7 +67,7 @@ bool processIdentity(int descriptor, QByteArray &identity, qint64 &pid) {
     Q_UNUSED(descriptor)
     Q_UNUSED(identity)
     Q_UNUSED(pid)
-    return false;
+    return fail(QStringLiteral("Process-handle authentication is unavailable in this build"));
 #endif
 }
 } // namespace
@@ -103,8 +100,8 @@ bool SessionTermination::setSource(QObject *source) {
 
 SessionTermination::SessionTermination(QObject *source, QObject *notifications, QObject *parent)
     : QObject(parent), m_notifications(notifications) {
-    if (!setSource(source) || !notifications || notifications->thread() != thread() ||
-        !notifications->inherits("KWin::SessionManager")) {
+    setSource(source);
+    if (!notifications || notifications->thread() != thread() || !notifications->inherits("KWin::SessionManager")) {
         m_property = -1;
         return;
     }
@@ -130,7 +127,8 @@ bool SessionTermination::closing() const {
 }
 
 void SessionTermination::stateChanged() {
-    if (!m_source && !setSource(QDBusConnection::sessionBus().objectRegisteredAt(QStringLiteral("/Effects"))))
+    if ((!m_source || m_property < 0) &&
+        !setSource(QDBusConnection::sessionBus().objectRegisteredAt(QStringLiteral("/Effects"))))
         return;
     const bool nowClosing = closing();
     if (nowClosing == m_wasClosing)
@@ -161,28 +159,40 @@ void SessionTermination::terminate(const QVariantList &windows, const QVariantLi
     if (activeRules.isEmpty())
         return;
     QList<QPointer<QObject>> nativeWindows;
-    QSet<qint64> protectedPids;
+    QSet<QByteArray> blocked;
+    QSet<qint64> unverifiedPids;
     for (const auto &value : windows) {
         auto window = value.value<QObject *>();
         if (!window || window->thread() != thread() || !window->inherits("KWin::Window") ||
             window->property("deleted").toBool())
             continue;
         nativeWindows.append(window);
-        const auto info = windowInfo(window);
-        if (Minimize2Tray::protectedWindow(info) || info.value(QStringLiteral("modal")).toBool() ||
-            info.value(QStringLiteral("specialWindow")).toBool() ||
-            info.value(QStringLiteral("type")) == QLatin1String("other"))
-            protectedPids.insert(window->property("pid").toLongLong());
+        const auto info = Minimize2Tray::windowProperties(window);
+        const bool selected = std::any_of(activeRules.cbegin(), activeRules.cend(), [&](const auto &rule) {
+            return Minimize2Tray::matchFailure(rule.toMap(), info).isEmpty();
+        });
+        if (!selected) {
+            const ProcessHandle handle(process.openProcess(window));
+            QByteArray identity;
+            qint64 pid = -1;
+            if (processIdentity(handle.fd, identity, pid))
+                blocked.insert(identity);
+            else
+                unverifiedPids.insert(
+                    window->property("pid").toLongLong()); // Conservative exclusion, never authorization.
+        }
     }
     QSet<QByteArray> attempted;
-    int skipped = 0;
+    QSet<qint64> reportedFailures;
     for (const auto &window : nativeWindows) {
-        if (!closing() || !window)
+        if (!closing())
             return;
+        if (!window)
+            continue;
         const auto closeable = window->property("closeable");
         if (closeable.metaType().id() != QMetaType::Bool || closeable.toBool() || window->property("deleted").toBool())
             continue;
-        const auto info = windowInfo(window);
+        const auto info = Minimize2Tray::windowProperties(window);
         bool selected = false;
         for (const auto &value : activeRules) {
             if (Minimize2Tray::matchFailure(value.toMap(), info).isEmpty()) {
@@ -195,20 +205,33 @@ void SessionTermination::terminate(const QVariantList &windows, const QVariantLi
         const ProcessHandle handle(process.openProcess(window));
         QByteArray identity;
         qint64 pid = -1;
-        if (!processIdentity(handle.fd, identity, pid) || protectedPids.contains(pid)) {
-            ++skipped;
+        QString failure;
+        if (!processIdentity(handle.fd, identity, pid, &failure) || blocked.contains(identity) ||
+            unverifiedPids.contains(pid) || pid != window->property("pid").toLongLong()) {
+            const auto reportedPid = window->property("pid").toLongLong();
+            if (reportedFailures.contains(reportedPid))
+                continue;
+            reportedFailures.insert(reportedPid);
+            Minimize2Tray::log(QtWarningMsg, "SessionTermination", "authenticate", "skipped",
+                               window->property("internalId").toUuid().toString(QUuid::WithoutBraces), pid,
+                               failure.isEmpty()
+                                   ? QStringLiteral("PID mismatch or a protected/unmatched sibling shares this process")
+                                   : failure);
             continue;
         }
-        if (!closing() || !window || window->property("deleted").toBool() || window->property("closeable").toBool())
+        if (!closing())
             return;
+        if (!window || window->property("deleted").toBool() || window->property("closeable").toBool())
+            continue;
         if (attempted.contains(identity))
             continue;
         attempted.insert(identity);
 #if defined(SYS_pidfd_send_signal)
         if (syscall(SYS_pidfd_send_signal, handle.fd, SIGTERM, nullptr, 0) != 0)
-            qWarning() << "Minimize2Tray: logout SIGTERM was not delivered to process" << pid;
+            Minimize2Tray::log(QtWarningMsg, "SessionTermination", "SIGTERM", "failed", {}, pid,
+                               QString::fromLocal8Bit(strerror(errno)));
+        else
+            Minimize2Tray::log(QtInfoMsg, "SessionTermination", "SIGTERM", "sent", {}, pid);
 #endif
     }
-    if (skipped)
-        qWarning() << "Minimize2Tray: skipped logout termination for" << skipped << "unverified or protected windows";
 }

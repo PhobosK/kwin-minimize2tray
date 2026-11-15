@@ -182,6 +182,7 @@
 
 <chapter id="advanced"><title>Backups and troubleshooting</title>
 <sect1 id="troubleshooting"><title>Diagnosing unexpected behavior</title>
+<para>Explicit tray Quit uses the matching KWin adapter to send a close event to the selected native Wayland toplevel even when KDE disables closing. It does not change rules or signal a process; applications may ignore it. Blocked X11/XWayland closes are reported without a PID fallback. Logout termination skips processes with protected or unmatched sibling windows. Debug logging changes take effect immediately; essential errors are recorded even with debugging off.</para>
 <variablelist>
 <varlistentry><term>A window is not hidden</term><listitem><para>Use Detect and Preview to check actual properties, all checked conditions, window type and child protection. On Wayland, do not use X11-only tools as evidence for a native window.</para></listitem></varlistentry>
 <varlistentry><term>The tray icon is generic</term><listitem><para>Check the installed launcher or select a per-rule icon override. Do not add an unrelated Application ID to select an icon.</para></listitem></varlistentry>

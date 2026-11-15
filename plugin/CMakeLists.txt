@@ -33,7 +33,7 @@ install(TARGETS kcm_minimize2tray DESTINATION ${KDE_INSTALL_PLUGINDIR}/kwin/effe
 
 # Keep KWin's version-specific ABI out of the QML plugin. This optional adapter
 # is inspected before loading and only used with the exact SDK version it targets.
-option(BUILD_SESSION_TERMINATION "Build native Wayland logout termination support when the KWin SDK is available" ON)
+option(BUILD_SESSION_TERMINATION "Build native Wayland close/logout support when the KWin SDK is available" ON)
 if(BUILD_SESSION_TERMINATION)
     include(CheckCXXSourceCompiles)
     check_cxx_source_compiles("#include <sys/socket.h>
@@ -53,9 +53,10 @@ int main() { pidfd_info info{}; unsigned long request = PIDFD_GET_INFO; int opti
         set_target_properties(sessionprocess PROPERTIES PREFIX "")
         target_include_directories(sessionprocess PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
         target_link_libraries(sessionprocess PRIVATE KWin::kwin)
+        target_link_options(sessionprocess PRIVATE "-Wl,--no-undefined")
         install(TARGETS sessionprocess DESTINATION ${KDE_INSTALL_QMLDIR}/com/github/luisbocanegra/${LIB_NAME})
     else()
-        message(STATUS "KWin 6.8+ SDK or Linux 6.13+ process-handle headers unavailable; logout termination is disabled (other features are unchanged)")
+        message(STATUS "KWin 6.8+ SDK or Linux 6.13+ process-handle headers unavailable; native close/logout adapter is disabled (ordinary tray and window features remain available)")
     endif()
 endif()
 

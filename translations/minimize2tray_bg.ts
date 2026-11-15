@@ -1151,8 +1151,8 @@
             <translation>Изход при напускане на сесията</translation>
         </message>
         <message>
-            <source>During logout, restart or shutdown, send SIGTERM if KDE has disabled closing for a matching window. This terminates its whole process, possibly without save prompts. Requires a verified native Wayland process, Linux 6.13+ and an adapter built for the running KWin. XWayland and protected processes are left alone. Cancelling logout cannot restore a terminated application.</source>
-            <translation>При излизане от сесията, рестартиране или изключване изпраща SIGTERM, ако KDE е забранил затварянето на съответстващ прозорец. Това прекратява целия му процес, възможно без запитване за запис. Изисква потвърден процес, работещ директно с Wayland, Linux 6.13+ и адаптер, компилиран за текущия KWin. XWayland и защитените процеси не се засягат. Отмяната на излизането не може да възстанови прекратено приложение.</translation>
+            <source>During logout, restart or shutdown, send SIGTERM if KDE has disabled closing for a matching window. This terminates its whole process, possibly without save prompts. Requires a verified native Wayland process, Linux 6.13+ and an adapter built for the running KWin. Processes sharing protected or unmatched windows, and XWayland windows, are left alone. Cancelling logout cannot restore a terminated application.</source>
+            <translation>При изход от сесията, рестартиране или изключване изпраща SIGTERM, ако KDE е забранило затварянето на съответстващ прозорец. Това прекратява целия процес, възможно без запитване за запис. Изисква проверен роден процес на Wayland, Linux 6.13+ и адаптер за работещата версия на KWin. Процеси със защитени или несъответстващи прозорци и прозорци на XWayland не се засягат. Отмяната на изхода не възстановява прекратено приложение.</translation>
         </message>
         <message>
             <source>Quit on logout is unavailable: this build has no matching KWin adapter.</source>
@@ -1616,8 +1616,8 @@
             <translation>Изход</translation>
         </message>
         <message>
-            <source>Close this window. Other windows of the application may remain open.</source>
-            <translation>Затваря този прозорец. Други прозорци на приложението може да останат отворени.</translation>
+            <source>Request closing this window. Native Wayland windows use the matching KWin adapter when KDE disables closing. This does not kill the application process or change KDE rules; the application may ignore the request.</source>
+            <translation>Изпращане на заявка за затваряне само на този прозорец. За родни прозорци на Wayland се използва съответстващият адаптер за KWin, когато KDE забранява затварянето. Процесът не се прекратява и правилата на KDE не се променят; приложението може да пренебрегне заявката.</translation>
         </message>
     </context>
 </TS>

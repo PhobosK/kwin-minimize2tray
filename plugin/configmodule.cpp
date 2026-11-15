@@ -1,8 +1,10 @@
 #include "applicationidentity.h"
 #include "configbackup.h"
+#include "kwinruntime.h"
+#include "logging.h"
+#include "nativetray.h"
 #include "rules.h"
 #include "translation.h"
-#include "nativetray.h"
 #include <QDesktopServices>
 #include <QImageReader>
 #include <QUrl>
@@ -757,7 +759,8 @@ class RuleDialog : public QDialog {
             toolTipText(tr("During logout, restart or shutdown, send SIGTERM if KDE has disabled closing "
                            "for a matching window. This terminates its whole process, possibly without "
                            "save prompts. Requires a verified native Wayland process, Linux 6.13+ and "
-                           "an adapter built for the running KWin. XWayland and protected processes are "
+                           "an adapter built for the running KWin. Processes sharing protected or unmatched windows, "
+                           "and XWayland windows, are "
                            "left alone. Cancelling logout cannot restore a terminated application.")));
         actions->addRow(QString(), withInfo(m_quitOnLogout));
 #if !MINIMIZE2TRAY_HAS_SESSION_PROCESS
@@ -1735,7 +1738,7 @@ class Minimize2TrayConfig : public KCModule {
         // Configuration launched outside KWin is an ordinary managed window.
         // Repeated tray requests reuse it, even while there are no tray items.
         auto bus = QDBusConnection::sessionBus();
-        if (QGuiApplication::platformName() != QLatin1String("org.kde.kwin.qpa") &&
+        if (!Minimize2Tray::internalKWinPlatform() &&
             bus.registerObject(QStringLiteral("/Minimize2Tray/Configuration"), this,
                                QDBusConnection::ExportScriptableSlots)) {
             m_activationRegistered = bus.registerService(QString::fromLatin1(ConfigService));
@@ -2425,7 +2428,10 @@ class Minimize2TrayConfig : public KCModule {
             setMessage(message,
                        tr("Configuration exported, including pending edits. Global shortcuts are not included."));
     }
-    void saveError(const QString &message) { setMessage(m_error, message); }
+    void saveError(const QString &message) {
+        Minimize2Tray::log(QtWarningMsg, "ConfigModule", "save", "failed", {}, 0, message);
+        setMessage(m_error, message);
+    }
     void guardDialog(QDialog *host) {
         if (!host || host->property("minimize2traySaveGuard").toBool())
             return;

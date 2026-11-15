@@ -1,11 +1,13 @@
 #include "scriptconfig.h"
-#include "rules.h"
-#include "translation.h"
 #include "applicationidentity.h"
 #include "diagnostics.h"
+#include "kwinruntime.h"
+#include "logging.h"
 #include "nativetray.h"
+#include "rules.h"
 #include "sessionprocess.h"
 #include "sessiontermination.h"
+#include "translation.h"
 #include <KSycoca>
 
 #include <KAboutApplicationDialog>
@@ -30,13 +32,15 @@
 #include <QStandardPaths>
 #include <QUuid>
 #include <algorithm>
+#include <cerrno>
+#include <cstring>
 
 ScriptConfig::ScriptConfig(QObject *parent) : QObject(parent), m_config(QStringLiteral("kwinrc")) {
     Minimize2Tray::loadTranslations();
     m_elapsed.start();
     m_recoveryTimer.setInterval(5000);
     connect(&m_recoveryTimer, &QTimer::timeout, this, &ScriptConfig::recoverTrayInput);
-    connect(Minimize2Tray::applicationIndexNotifier(), SIGNAL(changed()), this, SIGNAL(valuesChanged()));
+    connect(Minimize2Tray::applicationIndexNotifier(), SIGNAL(changed()), this, SIGNAL(reconciliationRequested()));
     m_detectionTimer.setSingleShot(true);
     m_detectionTimer.setInterval(150000);
     connect(&m_detectionTimer, &QTimer::timeout, this, &ScriptConfig::finishWindowDetection);
@@ -46,7 +50,7 @@ ScriptConfig::ScriptConfig(QObject *parent) : QObject(parent), m_config(QStringL
         if (owner == m_detectionOwner)
             finishWindowDetection();
     });
-    connect(KSycoca::self(), &KSycoca::databaseChanged, this, &ScriptConfig::valuesChanged);
+    connect(KSycoca::self(), &KSycoca::databaseChanged, this, &ScriptConfig::reconciliationRequested);
     m_reloadTimer.setSingleShot(true);
     m_reloadTimer.setInterval(50);
     connect(&m_reloadTimer, &QTimer::timeout, this, &ScriptConfig::reload);
@@ -61,12 +65,18 @@ ScriptConfig::ScriptConfig(QObject *parent) : QObject(parent), m_config(QStringL
     }
     m_registered = QDBusConnection::sessionBus().registerObject(QStringLiteral("/Minimize2Tray"), this,
                                                                 QDBusConnection::ExportScriptableSlots);
+    if (!m_registered)
+        Minimize2Tray::log(QtWarningMsg, "ScriptConfig", "register-dbus", "failed", {}, 0,
+                           QDBusConnection::sessionBus().lastError().message());
     reload();
 }
 
 ScriptConfig::~ScriptConfig() {
     finishWindowDetection();
-    if (m_recoveryProcess) m_recoveryProcess->kill();
+    if (m_recoveryProcess) {
+        m_recoveryProcess->setProperty("cancelled", true);
+        m_recoveryProcess->kill();
+    }
     // QProcess belongs to the application until it exits: never wait for a child
     // process on KWin's event loop, and never terminate an independently opened host.
     if (m_configProcess)
@@ -83,6 +93,7 @@ void ScriptConfig::reload() {
     auto rules = m_values.value(QStringLiteral("rules")).toList();
     QString error = m_error;
     const KConfigGroup group(&m_config, Minimize2Tray::ConfigGroup);
+    Minimize2Tray::setDebugLogging(group.readEntry("debugEnabled", false));
     Minimize2Tray::setStartupTiming(group.readEntry("debugEnabled", false) && group.readEntry("startupDiagnostics", false));
     Minimize2Tray::StartupSpan timing("initial configuration load");
     // Geometry and other KWin settings share this file. Decode rules only when
@@ -102,17 +113,16 @@ void ScriptConfig::reload() {
             });
         if (!terminationEnabled) {
             m_sessionTermination.reset();
-        } else if (!m_sessionTermination && QGuiApplication::platformName() == QLatin1String("org.kde.kwin.qpa")) {
+        } else if (!m_sessionTermination && Minimize2Tray::internalKWinPlatform()) {
             const auto bus = QDBusConnection::sessionBus();
             auto source = bus.objectRegisteredAt(QStringLiteral("/Effects"));
             auto notifications = bus.objectRegisteredAt(QStringLiteral("/Session"));
             m_sessionTermination = std::make_unique<SessionTermination>(source, notifications, this);
-            if (m_sessionTermination->available())
-                connect(m_sessionTermination.get(), &SessionTermination::closingRequested, this,
-                        &ScriptConfig::sessionClosing);
-            else
-                qWarning()
-                    << "Minimize2Tray: KWin session-closing state is unavailable; logout termination is disabled";
+            connect(m_sessionTermination.get(), &SessionTermination::closingRequested, this,
+                    &ScriptConfig::sessionClosing);
+            if (!m_sessionTermination->available())
+                Minimize2Tray::log(QtWarningMsg, "ScriptConfig", "session-watcher", "unavailable", {}, 0,
+                                   QStringLiteral("KWin session objects are not available yet"));
         }
         m_hasRulesSource = group.hasKey("rules");
         m_rulesSource = group.readEntry("rules", QString());
@@ -128,18 +138,21 @@ void ScriptConfig::reload() {
         });
     if (observeNative && !m_nativeTray) {
         m_nativeTray = std::make_unique<NativeTrayMonitor>(this);
-        connect(m_nativeTray.get(), &NativeTrayMonitor::changed, this, &ScriptConfig::valuesChanged);
+        connect(m_nativeTray.get(), &NativeTrayMonitor::changed, this, &ScriptConfig::reconciliationRequested);
     } else if (!observeNative) m_nativeTray.reset();
     if (recoverInput && m_trayCount > 0) m_recoveryTimer.start();
     else {
         m_recoveryTimer.stop();
-        if (m_recoveryProcess) m_recoveryProcess->kill();
+        if (m_recoveryProcess) {
+            m_recoveryProcess->setProperty("cancelled", true);
+            m_recoveryProcess->kill();
+        }
     }
     values.insert(QStringLiteral("rules"), rules);
     if (error != m_error) {
         m_error = error;
         if (!error.isEmpty()) {
-            qWarning().noquote() << "Minimize2Tray:" << error;
+            Minimize2Tray::log(QtWarningMsg, "ScriptConfig", "reload", "invalid-rules", {}, 0, error);
         }
     }
     if (values != m_values) {
@@ -159,23 +172,86 @@ void ScriptConfig::terminateSessionWindows(const QVariantList &windows) {
     QString error;
     const auto rules = Minimize2Tray::readRules(config, error);
     if (!error.isEmpty()) {
-        qWarning() << "Minimize2Tray: skipping logout termination because the current rules are invalid";
+        Minimize2Tray::log(QtWarningMsg, "ScriptConfig", "logout", "invalid-rules", {}, 0, error);
         return;
     }
-    QPluginLoader loader(sessionProcessPluginPath());
-    const auto metadata = loader.metaData();
-    if (metadata.value(QStringLiteral("IID")) != QJsonValue(QStringLiteral(SessionProcess_iid)) ||
-        metadata.value(QStringLiteral("MetaData")).toObject().value(QStringLiteral("KWinVersion")) !=
-            QJsonValue(QCoreApplication::applicationVersion())) {
-        qWarning() << "Minimize2Tray: logout termination needs an adapter built for this KWin version";
-        return;
-    }
-    auto process = qobject_cast<SessionProcess *>(loader.instance());
+    auto process = loadProcessAdapter(error);
     if (!process) {
-        qWarning() << "Minimize2Tray: could not load the logout process adapter:" << loader.errorString();
+        Minimize2Tray::log(QtWarningMsg, "ScriptConfig", "load-adapter", "failed", {}, 0, error);
         return;
     }
     m_sessionTermination->terminate(windows, rules, *process);
+}
+
+SessionProcess *ScriptConfig::loadProcessAdapter(QString &error) {
+    if (!MINIMIZE2TRAY_HAS_SESSION_PROCESS || !Minimize2Tray::internalKWinPlatform()) {
+        error = QStringLiteral("Native adapter unavailable in this build or outside KWin");
+        return nullptr;
+    }
+    if (m_processAdapter)
+        return qobject_cast<SessionProcess *>(m_processAdapter->instance());
+    const auto path = sessionProcessPluginPath();
+    if (path.isEmpty()) {
+        error = QStringLiteral("Cannot resolve the adapter beside the loaded plugin");
+        return nullptr;
+    }
+    auto loader = std::make_unique<QPluginLoader>(path);
+    const auto metadata = loader->metaData();
+    if (metadata.value(QStringLiteral("IID")) != QJsonValue(QStringLiteral(SessionProcess_iid)) ||
+        metadata.value(QStringLiteral("MetaData")).toObject().value(QStringLiteral("KWinVersion")) !=
+            QJsonValue(QCoreApplication::applicationVersion())) {
+        error = QStringLiteral("Adapter interface/KWin version mismatch; rebuild for the running KWin");
+        return nullptr;
+    }
+    auto adapter = qobject_cast<SessionProcess *>(loader->instance());
+    if (!adapter) {
+        error = loader->errorString();
+        return nullptr;
+    }
+    m_processAdapter = std::move(loader);
+    return adapter;
+}
+
+bool ScriptConfig::requestWindowClose(QObject *window) {
+    if (!window || window->thread() != thread() || !window->inherits("KWin::Window") ||
+        window->property("deleted").toBool())
+        return false;
+    const auto info = Minimize2Tray::windowProperties(window);
+    const auto id = window->property("internalId").toUuid().toString(QUuid::WithoutBraces);
+    if (Minimize2Tray::protectedWindow(info)) {
+        Minimize2Tray::log(QtWarningMsg, "ScriptConfig", "close", "protected", id);
+        return false;
+    }
+    const auto closeable = window->property("closeable");
+    if (closeable.metaType().id() != QMetaType::Bool) {
+        Minimize2Tray::log(QtWarningMsg, "ScriptConfig", "close", "failed", id, 0,
+                           QStringLiteral("Missing closeable property"));
+        return false;
+    }
+    if (closeable.toBool()) {
+        const bool sent = QMetaObject::invokeMethod(window, "closeWindow", Qt::DirectConnection);
+        Minimize2Tray::log(sent ? QtDebugMsg : QtWarningMsg, "ScriptConfig", "close", sent ? "requested" : "failed",
+                           id);
+        return sent;
+    }
+    if (info.value(QStringLiteral("modal")).toBool() || info.value(QStringLiteral("specialWindow")).toBool() ||
+        !QStringList{QStringLiteral("normal"), QStringLiteral("dialog"), QStringLiteral("utility")}.contains(
+            info.value(QStringLiteral("type")).toString())) {
+        Minimize2Tray::log(QtWarningMsg, "ScriptConfig", "native-close", "protected", id);
+        return false;
+    }
+    QString error;
+    auto adapter = loadProcessAdapter(error);
+    const bool sent = adapter && adapter->requestClose(window);
+    if (!sent && error.isEmpty())
+        error = QStringLiteral("Native toplevel close request: %1").arg(QString::fromLocal8Bit(strerror(errno)));
+    Minimize2Tray::log(sent ? QtDebugMsg : QtWarningMsg, "ScriptConfig", "native-close", sent ? "requested" : "failed",
+                       id, 0, error);
+    return sent;
+}
+
+void ScriptConfig::logDiagnostic(const QString &operation, const QString &window) {
+    Minimize2Tray::log(QtDebugMsg, "WindowLifecycle", qPrintable(operation.left(96)), "observed", window);
 }
 
 bool ScriptConfig::isProtected(const QVariantMap &window) const { return Minimize2Tray::protectedWindow(window); }
@@ -279,7 +355,10 @@ void ScriptConfig::setTrayCount(int count) {
         if (!m_recoveryTimer.isActive()) m_recoveryTimer.start();
     } else {
         m_recoveryTimer.stop();
-        if (m_recoveryProcess) m_recoveryProcess->kill();
+        if (m_recoveryProcess) {
+            m_recoveryProcess->setProperty("cancelled", true);
+            m_recoveryProcess->kill();
+        }
     }
 }
 void ScriptConfig::recoverTrayInput() {
@@ -290,17 +369,43 @@ void ScriptConfig::recoverTrayInput() {
     if (adapter.isEmpty()) return; // Never search the working directory or PATH.
     const auto executable = QFileInfo(adapter).dir().filePath(QStringLiteral("minimize2tray-tray-recovery"));
     const QFileInfo helper(executable);
-    if (!helper.isFile() || !helper.isExecutable()) return;
+    if (!helper.isFile() || !helper.isExecutable()) {
+        const auto detail = QStringLiteral("Installed recovery helper is missing or not executable");
+        if (m_recoveryError != detail)
+            Minimize2Tray::log(QtWarningMsg, "ScriptConfig", "input-recovery", "unavailable", {}, 0, detail);
+        m_recoveryError = detail;
+        return;
+    }
     auto process = new QProcess(QCoreApplication::instance());
     m_recoveryProcess = process;
     process->setProcessChannelMode(QProcess::ForwardedErrorChannel);
     connect(process, &QProcess::finished, process, &QObject::deleteLater);
-    connect(process, &QProcess::errorOccurred, process, &QObject::deleteLater);
+    connect(process, &QProcess::errorOccurred, this, [this, process](QProcess::ProcessError error) {
+        if (error == QProcess::FailedToStart) {
+            if (m_recoveryError != process->errorString())
+                Minimize2Tray::log(QtWarningMsg, "ScriptConfig", "input-recovery", "start-failed", {}, 0,
+                                   process->errorString());
+            m_recoveryError = process->errorString();
+            process->deleteLater();
+        }
+    });
     // A stalled X server must never stall the compositor or leave a worker running.
     QTimer::singleShot(4000, process, [process]() { if (process->state() != QProcess::NotRunning) process->kill(); });
     connect(process, &QProcess::finished, this, [this, process]() {
         const auto output = process->readAllStandardOutput();
-        if (!output.isEmpty() && m_values.value(QStringLiteral("debugEnabled")).toBool()) qInfo().noquote() << output.trimmed();
+        if (!output.isEmpty())
+            Minimize2Tray::log(QtDebugMsg, "ScriptConfig", "input-recovery", "completed", {}, 0,
+                               QString::fromLocal8Bit(output.trimmed()));
+        if (!process->property("cancelled").toBool() &&
+            (process->exitStatus() == QProcess::CrashExit || process->exitCode() != 0)) {
+            const auto detail = QStringLiteral("exit_code=%1; %2").arg(process->exitCode()).arg(
+                process->exitStatus() == QProcess::CrashExit ? process->errorString() :
+                QStringLiteral("helper rejected its preconditions or could not query the X11 backend"));
+            if (m_recoveryError != detail)
+                Minimize2Tray::log(QtWarningMsg, "ScriptConfig", "input-recovery", "failed", {}, 0, detail);
+            m_recoveryError = detail;
+        } else
+            m_recoveryError.clear();
     });
     process->start(executable, pids.mid(0,32));
 }

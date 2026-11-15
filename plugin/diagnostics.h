@@ -1,9 +1,10 @@
 #pragma once
-#include <QDebug>
+#include "logging.h"
 #include <QElapsedTimer>
 #include <QMutex>
 #include <QMutexLocker>
 #include <QSet>
+#include <QUuid>
 #include <atomic>
 
 namespace Minimize2Tray {
@@ -18,9 +19,7 @@ inline void setStartupTiming(bool enabled) {
 }
 inline void startupEvent(const char *event, const QString &window = {}) {
     if (startupTimingEnabled.load(std::memory_order_relaxed)) {
-        QElapsedTimer now;
-        now.start();
-        qInfo().noquote() << "Minimize2Tray timing:" << now.msecsSinceReference() << event << window;
+        log(QtDebugMsg, "StartupDiagnostics", event, "observed", window);
     }
 }
 class StartupSpan {
@@ -38,10 +37,8 @@ class StartupSpan {
     }
     ~StartupSpan() {
         if (timer.isValid() && startupTimingEnabled.load(std::memory_order_relaxed)) {
-            QElapsedTimer now;
-            now.start();
-            qInfo().noquote() << "Minimize2Tray timing:" << now.msecsSinceReference() << label << identity
-                              << timer.nsecsElapsed() / 1000000.0 << "ms";
+            log(QtDebugMsg, "StartupDiagnostics", label, "measured", QUuid(identity).isNull() ? QString() : identity, 0,
+                QStringLiteral("duration_ms=%1").arg(timer.nsecsElapsed() / 1000000.0));
         }
     }
 

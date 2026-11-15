@@ -150,6 +150,10 @@ void NativeTrayMonitor::refresh() {
                             if (generation != m_generation)
                                 return;
                             m_available = !reply.isError();
+                            if (reply.isError() && !m_warnedUnavailable)
+                                Minimize2Tray::log(QtWarningMsg, "NativeTrayMonitor", "query-watcher", "unavailable",
+                                                   {}, 0, reply.error().message());
+                            m_warnedUnavailable = reply.isError();
                             if (!reply.isError()) {
                                 const auto data = reply.value().variant();
                                 const auto entries = data.metaType().id() == qMetaTypeId<QDBusArgument>()
