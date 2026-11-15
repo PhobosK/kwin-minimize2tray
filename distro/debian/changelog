@@ -1,3 +1,10 @@
+kwin6-script-minimize2tray (3.1.0-1) unstable; urgency=medium
+
+  * Restore tray Quit and safe logout handling with a matching KWin adapter.
+  * Improve process checks, cleanup and runtime diagnostics.
+
+ -- PhobosK <PhobosK@users.noreply.github.com>  Sun, 15 Nov 2026 18:20:02 +0200
+
 kwin6-script-minimize2tray (3.0.0-1) unstable; urgency=medium
 
   * Improve tray reliability, rule editing, startup performance and diagnostics.

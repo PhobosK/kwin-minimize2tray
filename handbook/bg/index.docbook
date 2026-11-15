@@ -6,7 +6,7 @@
 <book id="kwin-minimize2tray" lang="&language;">
 <bookinfo>
 <title>Ръководство за Minimize2Tray</title>
-<date>2026-11-15</date><releaseinfo>3.0.0</releaseinfo>
+<date>2026-11-15</date><releaseinfo>3.1.0</releaseinfo>
 <abstract><para>Правила за прозорци и управление на икони в системната област в разклонението на PhobosK на KWin Minimize2Tray.</para></abstract>
 <keywordset><keyword>KDE</keyword><keyword>KWin</keyword><keyword>Minimize2Tray</keyword></keywordset>
 </bookinfo>

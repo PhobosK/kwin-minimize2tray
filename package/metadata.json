@@ -22,7 +22,7 @@
         "License": "GPL",
         "Name": "Minimize to Tray",
         "Icon": "view-visible-symbolic",
-        "Version": "3.0.0",
+        "Version": "3.1.0",
         "Website": "https://github.com/PhobosK/kwin-minimize2tray",
         "Name[bg]": "Минимизиране в системната област",
         "Description[bg]": "Минимизиране на прозорци в системната област и скриване от лентата със задачи, превключвателя и прегледа на работните плотове"

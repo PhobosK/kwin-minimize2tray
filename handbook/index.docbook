@@ -6,7 +6,7 @@
 <book id="kwin-minimize2tray" lang="&language;">
 <bookinfo>
 <title>The Minimize2Tray Handbook</title>
-<date>2026-11-15</date><releaseinfo>3.0.0</releaseinfo>
+<date>2026-11-15</date><releaseinfo>3.1.0</releaseinfo>
 <abstract><para>Window rules and tray controls for the PhobosK fork of KWin Minimize2Tray.</para></abstract>
 <keywordset><keyword>KDE</keyword><keyword>KWin</keyword><keyword>Minimize2Tray</keyword></keywordset>
 </bookinfo>
